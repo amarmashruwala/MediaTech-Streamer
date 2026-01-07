@@ -9,27 +9,49 @@
     <style>
         :root {
             --studio-bg: #09090b;
-            --studio-card: #18181b;
+            --studio-panel: #0c0c0e;
+            --studio-card: #121214;
             --studio-border: #27272a;
+            --studio-text: #fafafa;
+            --studio-text-muted: #71717a;
             --accent: #6366f1;
             --accent-glow: rgba(99, 102, 241, 0.3);
         }
 
+        [data-theme='light'] {
+            --studio-bg: #f4f4f5;
+            --studio-panel: #ffffff;
+            --studio-card: #ffffff;
+            --studio-border: #e4e4e7;
+            --studio-text: #09090b;
+            --studio-text-muted: #52525b;
+            --accent: #4f46e5;
+            --accent-glow: rgba(79, 70, 229, 0.2);
+        }
+
+        [data-theme='midnight'] {
+            --studio-bg: #020617;
+            --studio-panel: #0f172a;
+            --studio-card: #1e293b;
+            --studio-border: #334155;
+            --studio-text: #f8fafc;
+            --studio-text-muted: #94a3b8;
+            --accent: #38bdf8;
+            --accent-glow: rgba(56, 189, 248, 0.2);
+        }
+
         body {
             background-color: var(--studio-bg);
-            color: #fafafa;
+            color: var(--studio-text);
             font-family: 'Inter', sans-serif;
             letter-spacing: -0.01em;
+            transition: background-color 0.3s ease, color 0.3s ease;
         }
 
         .studio-glass {
-            background: rgba(24, 24, 27, 0.8);
+            background: rgba(var(--studio-card-rgb), 0.8);
             backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-        }
-
-        .vu-meter-segment {
-            transition: background-color 0.1s ease;
+            border: 1px solid var(--studio-border);
         }
 
         .custom-scrollbar::-webkit-scrollbar {
@@ -39,14 +61,10 @@
             background: transparent;
         }
         .custom-scrollbar::-webkit-scrollbar-thumb {
-            background: #3f3f46;
+            background: var(--studio-border);
             border-radius: 10px;
         }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-            background: #52525b;
-        }
 
-        /* Sophisticated UI Animations */
         @keyframes pulse-ring {
             0% { transform: scale(0.95); opacity: 1; }
             50% { transform: scale(1.1); opacity: 0.5; }
