@@ -1,0 +1,16 @@
+
+version: '3.8'
+
+services:
+  mediatech-streamer:
+    build: .
+    container_name: mediatech-streamer-app
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+    networks:
+      - streaming-network
+
+networks:
+  streaming-network:
+    driver: bridge

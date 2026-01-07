@@ -1,42 +1,103 @@
+# 🎯 MediaTech Streamer - Deployment Guide
 
-# 🎯 Twitch WHIP Broadcaster Pro
+MediaTech Streamer is a professional-grade WHIP (WebRTC-HTTP Ingestion Protocol) broadcaster designed for Twitch. Follow these instructions to deploy the application successfully.
 
-A production-grade WebRTC streaming application that broadcasts high-quality video directly to Twitch using the modern **WHIP (WebRTC-HTTP Ingestion Protocol)**.
+---
 
-## 🚀 Setup Instructions
+## ⚠️ Critical Requirement: HTTPS
+Modern browsers **block** access to the Camera, Microphone, and Screen Sharing unless the site is served over **HTTPS** (Secure Context). 
+- **Development**: `localhost` is treated as a secure context.
+- **Production**: You **MUST** use an SSL certificate (Let's Encrypt, Cloudflare, etc.).
 
-1.  **Local Development**:
-    *   This app requires a secure context (HTTPS) or `localhost` to access the camera and microphone.
-    *   Host these files on any static web server or development environment.
+---
 
-2.  **Twitch Configuration**:
-    *   Go to your [Twitch Stream Settings](https://dashboard.twitch.tv/settings/stream).
-    *   Find your **Primary Stream Key**.
-    *   Paste this key into the "Twitch Stream Key" field in the app.
+## 📦 Option 1: Deploy with Docker (Recommended)
 
-3.  **Permissions**:
-    *   When you click "Enable Camera & Mic", the browser will prompt for permissions.
-    *   The app uses the **VDO.Ninja SDK** principles for robust media capture and device handling.
+This is the fastest way to get a production-ready environment running locally or on a VPS.
 
-## 🧱 Technical Details
+### 1. Build and Start
+Ensure you have Docker and Docker Compose installed, then run:
+```bash
+docker-compose up -d --build
+```
 
-*   **Ingest Protocol**: WHIP (RFC 9421).
-*   **Media Management**: Utilizes `getUserMedia` with ideal constraints for high-fidelity 1080p/720p capture.
-*   **WebRTC Stack**: Standard `RTCPeerConnection` with SDP munging logic implemented in `whipClient.ts` to ensure Twitch compatibility.
-*   **Keep-Alive**: Implements periodic `OPTIONS` requests to keep the WHIP session active during long broadcasts.
+### 2. Access the App
+- Open your browser to `http://localhost:8080`.
+- The container uses Nginx to serve the app with the correct MIME types for ESM.
 
-## 🧪 Testing Procedure
+### 3. (Production) Add SSL
+If deploying to a server, use a reverse proxy like **Nginx Proxy Manager** or **Traefik** to provide SSL termination for the container.
 
-1.  Open the app in a browser.
-2.  Enable your camera and verify the local preview looks correct.
-3.  Enter your Twitch Stream Key.
-4.  Click **"Start Broadcast"**.
-5.  Check the **Output Monitor** (System Logs) for a "Handshake successful" message.
-6.  Open your [Twitch Channel](https://twitch.tv/) to see your live stream with sub-second latency.
+---
 
-## 🔧 Troubleshooting
+## 🌐 Option 2: Static Cloud Hosting (Vercel, Netlify, Cloudflare)
 
-*   **Error: Handshake failed**: Verify your Stream Key is correct and that your network allows outgoing POST requests on port 4443.
-*   **No Devices Found**: Ensure no other application (like OBS or Zoom) is exclusively locking your camera.
-*   **Stuttering Video**: Lower the "Target Bitrate" if your upload speed is limited. Twitch recommended max is 6000-8000kbps.
-*   **Mobile Usage**: Supported on iOS (Safari) and Android (Chrome). Note that mobile devices might throttle background WebRTC connections.
+Since this app is client-side driven, you can host it for free on most static platforms.
+
+### 1. Upload to GitHub
+Initialize a repository and push your code:
+```bash
+git init
+git add .
+git commit -m "initial commit"
+git remote add origin <your-repo-url>
+git push -u origin main
+```
+
+### 2. Connect to Hosting
+- **Vercel**: Import the project. It will automatically detect the `index.html`.
+- **Netlify**: Drag and drop the folder or connect your GitHub repo.
+- **GitHub Pages**: Go to Settings > Pages and set the source to the `main` branch.
+
+---
+
+## 🛠 Option 3: Manual Local Development
+
+If you just want to test changes quickly:
+
+### 1. Using a Python Server (Fastest)
+```bash
+# This will start a server on port 8000
+python3 -m http.server 8000
+```
+
+### 2. Using VS Code "Live Server"
+- Install the **Live Server** extension.
+- Click **"Go Live"** in the bottom right corner of VS Code.
+
+---
+
+## 🎮 Setting Up Twitch WHIP
+
+To actually start streaming, you need your Twitch credentials.
+
+1. **Get your Stream Key**:
+   - Go to the [Twitch Creator Dashboard](https://dashboard.twitch.tv/settings/stream).
+   - Copy your **Primary Stream Key**.
+
+2. **Configure the App**:
+   - Open MediaTech Streamer.
+   - Click **"Start Producer Engine"** to initialize your camera.
+   - Paste your **Stream Key** into the settings panel on the right.
+   - Click **"Go Live"**.
+
+3. **Monitor Connection**:
+   - Check the **Engine Logs** at the bottom right.
+   - Look for `Twitch handshake successful`.
+   - Your stream will appear on your Twitch channel with <1s latency.
+
+---
+
+## 🧪 Testing and Validation
+
+- **Desktop**: Test on Chrome or Edge for the best WebRTC performance.
+- **Mobile**: Supports iOS Safari and Android Chrome. Ensure you have granted "Camera" and "Microphone" permissions in system settings.
+- **Firewalls**: WHIP uses UDP port `4443` for the initial handshake and standard WebRTC ports for media. Ensure your network doesn't block outgoing UDP traffic.
+
+---
+
+## 🔧 Troubleshooting Deployment
+
+- **Blank Screen**: Check the browser console (F12). Ensure `index.tsx` is being loaded and that the `importmap` is valid.
+- **MIME Type Errors**: If you see "Failed to load module script: The server responded with a non-JavaScript MIME type", ensure your web server is configured to serve `.tsx` and `.ts` as `text/javascript` (This is handled automatically in the included `nginx.conf`).
+- **WebRTC Failed**: Usually caused by a restrictive corporate firewall or VPN. Try switching to a different network.
