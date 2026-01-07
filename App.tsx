@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Camera, Mic, Settings, Activity, ShieldCheck, Play, Square, RefreshCcw, Terminal, ExternalLink, Monitor, MonitorOff, Layers, User, Move, Maximize2, Video, VideoOff, MicOff, Volume2, VolumeX } from 'lucide-react';
+import { Camera, Mic, Settings, Activity, ShieldCheck, Play, Square, RefreshCcw, Terminal, ExternalLink, Monitor, MonitorOff, Layers, User, Move, Maximize2, Video, VideoOff, MicOff, Volume2, VolumeX, ChevronDown, ChevronUp, Zap } from 'lucide-react';
 import { StreamStatus, LogEntry, StreamConfig, DeviceInfo } from './types';
 import { WHIPClient } from './services/whipClient';
 
@@ -14,6 +14,10 @@ const App: React.FC = () => {
   const [selectedVideo, setSelectedVideo] = useState<string>('');
   const [selectedAudio, setSelectedAudio] = useState<string>('');
   
+  // UI States
+  const [isLogsMinimized, setIsLogsMinimized] = useState<boolean>(false);
+  const [canCaptureScreen, setCanCaptureScreen] = useState<boolean>(true);
+
   // Decoupled states
   const [isScreenPrimary, setIsScreenPrimary] = useState<boolean>(false);
   const [isPipEnabled, setIsPipEnabled] = useState<boolean>(false);
@@ -69,6 +73,19 @@ const App: React.FC = () => {
   const addLog = useCallback((entry: LogEntry) => {
     setLogs(prev => [...prev.slice(-99), entry]);
   }, []);
+
+  // Check for Screen Share support on mount
+  useEffect(() => {
+    const supported = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+    setCanCaptureScreen(supported);
+    if (!supported) {
+      addLog({ 
+        timestamp: new Date().toLocaleTimeString(), 
+        level: 'warn', 
+        message: 'Screen sharing is not supported on this device/browser (typical for mobile).' 
+      });
+    }
+  }, [addLog]);
 
   // Helper to draw images with "cover" behavior (maintaining aspect ratio)
   const drawImageCover = (
@@ -221,7 +238,6 @@ const App: React.FC = () => {
     const isPipMuted = isScreenPrimary ? isCamVideoMuted : isScreenVideoMuted;
 
     if (isMainActive && !isMainMuted && mainSource.readyState >= 2 && !mainSource.paused) {
-      // Use cover logic to prevent stretching
       drawImageCover(ctx, mainSource, 0, 0, width, height);
     }
 
@@ -237,9 +253,6 @@ const App: React.FC = () => {
       ctx.strokeStyle = '#9146ff';
       ctx.lineWidth = 4;
       ctx.strokeRect(px - 2, py - 2, pipW + 4, pipH + 4);
-      // Use drawImageCover for PIP too if desired, but standard drawImage works fine for small overlays
-      // if the target rect matches the source aspect ratio. 
-      // Here we calculated pipH based on pipSource.videoHeight/Width so standard is fine.
       ctx.drawImage(pipSource, px, py, pipW, pipH);
       ctx.restore();
     }
@@ -307,6 +320,10 @@ const App: React.FC = () => {
   };
 
   const startScreen = async () => {
+    if (!canCaptureScreen) {
+      addLog({ timestamp: new Date().toLocaleTimeString(), level: 'error', message: 'Screen capture is not available on this device.' });
+      return false;
+    }
     try {
       addLog({ timestamp: new Date().toLocaleTimeString(), level: 'info', message: 'Requesting screen capture...' });
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
@@ -331,6 +348,7 @@ const App: React.FC = () => {
   };
 
   const togglePrimaryView = async () => {
+    if (!canCaptureScreen) return;
     if (!isScreenPrimary) {
       if (!isScreenActive) {
         const success = await startScreen();
@@ -347,6 +365,10 @@ const App: React.FC = () => {
       if (isScreenPrimary) {
         if (!isCameraActive) await startCamera();
       } else {
+        if (!canCaptureScreen) {
+            addLog({ timestamp: new Date().toLocaleTimeString(), level: 'warn', message: 'Cannot enable Screen PiP: Feature not supported.' });
+            return;
+        }
         if (!isScreenActive) {
           const success = await startScreen();
           if (!success) return;
@@ -421,7 +443,7 @@ const App: React.FC = () => {
     <div className="min-h-screen p-4 md:p-8 flex flex-col gap-6 max-w-7xl mx-auto">
       <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-[#18181b] p-6 rounded-xl border border-[#26262b] shadow-2xl">
         <div className="flex items-center gap-4">
-          <div className="p-3 twitch-purple rounded-lg shadow-[0_0_20px_rgba(145,70,255,0.3)]">
+          <div className="p-3 bg-[#9146ff] rounded-lg shadow-[0_0_20px_rgba(145,70,255,0.3)]">
             <Activity className="text-white w-6 h-6" />
           </div>
           <div>
@@ -447,7 +469,7 @@ const App: React.FC = () => {
             className={`flex items-center gap-2 px-8 py-3 rounded-lg font-bold transition-all transform hover:scale-[1.02] active:scale-[0.98] ${
               status === StreamStatus.STREAMING 
                 ? 'bg-zinc-800 hover:bg-zinc-700 text-white' 
-                : 'twitch-purple twitch-purple-hover text-white'
+                : 'bg-[#9146ff] hover:bg-[#772ce8] text-white'
             }`}
           >
             {status === StreamStatus.STREAMING ? (
@@ -493,68 +515,72 @@ const App: React.FC = () => {
             )}
 
             <div className="absolute top-4 left-4 flex gap-2 pointer-events-none">
-              <div className="bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-md text-[10px] font-bold border border-white/10 uppercase tracking-tighter text-white">
+              <div className="bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-md text-[10px] font-bold border border-white/10 uppercase tracking-tighter text-white">
                 {isScreenPrimary ? 'Main: Screen' : 'Main: Camera'} {isPipEnabled && ' (PiP Enabled)'}
               </div>
             </div>
 
-            <div className="absolute bottom-4 left-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-              <div className="flex bg-black/60 backdrop-blur-md p-1.5 rounded-lg border border-white/10 gap-1.5 items-center">
-                <span className="text-[9px] font-bold text-zinc-500 uppercase px-1">Cam</span>
+            <div className="absolute bottom-4 left-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
+              <div className="flex bg-black/40 backdrop-blur-xl p-1.5 rounded-lg border border-white/10 gap-1.5 items-center">
+                <span className="text-[9px] font-bold text-zinc-400 uppercase px-1">Cam</span>
                 <button 
                   onClick={() => setIsCamVideoMuted(!isCamVideoMuted)}
-                  className={`p-1.5 rounded-md transition-all ${isCamVideoMuted ? 'bg-red-500/20 text-red-500' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                  className={`p-2 rounded-md transition-all ${isCamVideoMuted ? 'bg-red-500/20 text-red-500' : 'bg-white/5 text-white hover:bg-white/15'}`}
                   title={isCamVideoMuted ? "Show Camera" : "Hide Camera"}
                 >
                   {isCamVideoMuted ? <VideoOff className="w-3.5 h-3.5" /> : <Video className="w-3.5 h-3.5" />}
                 </button>
                 <button 
                   onClick={() => setIsCamAudioMuted(!isCamAudioMuted)}
-                  className={`p-1.5 rounded-md transition-all ${isCamAudioMuted ? 'bg-red-500/20 text-red-500' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                  className={`p-2 rounded-md transition-all ${isCamAudioMuted ? 'bg-red-500/20 text-red-500' : 'bg-white/5 text-white hover:bg-white/15'}`}
                   title={isCamAudioMuted ? "Unmute Mic" : "Mute Mic"}
                 >
                   {isCamAudioMuted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
                 </button>
               </div>
 
-              <div className="flex bg-black/60 backdrop-blur-md p-1.5 rounded-lg border border-white/10 gap-1.5 items-center">
-                <span className="text-[9px] font-bold text-zinc-500 uppercase px-1">Screen</span>
-                <button 
-                  onClick={() => setIsScreenVideoMuted(!isScreenVideoMuted)}
-                  className={`p-1.5 rounded-md transition-all ${isScreenVideoMuted ? 'bg-red-500/20 text-red-500' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                  title={isScreenVideoMuted ? "Show Screen" : "Hide Screen"}
-                >
-                  {isScreenVideoMuted ? <MonitorOff className="w-3.5 h-3.5" /> : <Monitor className="w-3.5 h-3.5" />}
-                </button>
-                <button 
-                  onClick={() => setIsScreenAudioMuted(!isScreenAudioMuted)}
-                  className={`p-1.5 rounded-md transition-all ${isScreenAudioMuted ? 'bg-red-500/20 text-red-500' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                  title={isScreenAudioMuted ? "Unmute Screen Audio" : "Mute Screen Audio"}
-                >
-                  {isScreenAudioMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-                </button>
-              </div>
+              {canCaptureScreen && (
+                <div className="flex bg-black/40 backdrop-blur-xl p-1.5 rounded-lg border border-white/10 gap-1.5 items-center">
+                    <span className="text-[9px] font-bold text-zinc-400 uppercase px-1">Screen</span>
+                    <button 
+                    onClick={() => setIsScreenVideoMuted(!isScreenVideoMuted)}
+                    className={`p-2 rounded-md transition-all ${isScreenVideoMuted ? 'bg-red-500/20 text-red-500' : 'bg-white/5 text-white hover:bg-white/15'}`}
+                    title={isScreenVideoMuted ? "Show Screen" : "Hide Screen"}
+                    >
+                    {isScreenVideoMuted ? <MonitorOff className="w-3.5 h-3.5" /> : <Monitor className="w-3.5 h-3.5" />}
+                    </button>
+                    <button 
+                    onClick={() => setIsScreenAudioMuted(!isScreenAudioMuted)}
+                    className={`p-2 rounded-md transition-all ${isScreenAudioMuted ? 'bg-red-500/20 text-red-500' : 'bg-white/5 text-white hover:bg-white/15'}`}
+                    title={isScreenAudioMuted ? "Unmute Screen Audio" : "Mute Screen Audio"}
+                    >
+                    {isScreenAudioMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                    </button>
+                </div>
+              )}
             </div>
 
-            <div className="absolute bottom-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="absolute bottom-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-all transform translate-y-2 group-hover:translate-y-0">
                <button 
                 onClick={togglePip}
-                className={`p-3 rounded-full backdrop-blur-xl border border-white/20 transition-all ${
-                  isPipEnabled ? 'bg-green-500 text-white' : 'bg-black/60 text-white hover:bg-black/80'
-                }`}
+                className={`p-3 rounded-full backdrop-blur-xl border border-white/20 transition-all shadow-lg ${
+                  isPipEnabled ? 'bg-green-600 text-white' : 'bg-black/60 text-white hover:bg-black/80'
+                } ${!canCaptureScreen && !isScreenPrimary ? 'opacity-50 cursor-not-allowed' : ''}`}
                 title="Toggle Picture-in-Picture"
               >
                 <Layers className="w-5 h-5" />
               </button>
-              <button 
-                onClick={togglePrimaryView}
-                className={`p-3 rounded-full backdrop-blur-xl border border-white/20 transition-all ${
-                  isScreenPrimary ? 'bg-[#9146ff] text-white' : 'bg-black/60 text-white hover:bg-black/80'
-                }`}
-                title={isScreenPrimary ? "Switch to Camera Background" : "Switch to Screen Background"}
-              >
-                {isScreenPrimary ? <Camera className="w-5 h-5" /> : <Monitor className="w-5 h-5" />}
-              </button>
+              {canCaptureScreen && (
+                <button 
+                    onClick={togglePrimaryView}
+                    className={`p-3 rounded-full backdrop-blur-xl border border-white/20 transition-all shadow-lg ${
+                    isScreenPrimary ? 'bg-[#9146ff] text-white' : 'bg-black/60 text-white hover:bg-black/80'
+                    }`}
+                    title={isScreenPrimary ? "Switch to Camera Background" : "Switch to Screen Background"}
+                >
+                    {isScreenPrimary ? <Camera className="w-5 h-5" /> : <Monitor className="w-5 h-5" />}
+                </button>
+              )}
             </div>
 
             {!isCameraActive && !isScreenActive && (
@@ -564,7 +590,7 @@ const App: React.FC = () => {
                 </div>
                 <button 
                   onClick={() => startCamera()}
-                  className="px-8 py-3 bg-white text-black hover:bg-zinc-200 rounded-lg text-sm font-bold transition-all shadow-xl"
+                  className="px-8 py-3 bg-white text-black hover:bg-zinc-200 rounded-lg text-sm font-bold transition-all shadow-2xl"
                 >
                   Start Producer Engine
                 </button>
@@ -572,46 +598,77 @@ const App: React.FC = () => {
             )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-[#18181b] p-6 rounded-xl border border-[#26262b]">
-              <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-3 block">Video Device</label>
-              <div className="flex gap-2">
-                <select 
-                  className="flex-1 bg-[#26262b] border border-[#3f3f46] rounded-lg px-4 py-2.5 text-sm outline-none cursor-pointer"
-                  value={selectedVideo}
-                  onChange={(e) => { setSelectedVideo(e.target.value); if (isCameraActive) startCamera(); }}
-                >
-                  {videoDevices.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
-                </select>
-                <button onClick={enumerateMedia} className="p-2.5 bg-[#26262b] rounded-lg border border-[#3f3f46]"><RefreshCcw className="w-4 h-4" /></button>
+          {/* Unified Device Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
+            {/* Video Device Card */}
+            <div className="bg-[#18181b] p-6 rounded-xl border border-[#26262b] shadow-lg flex flex-col hover:border-[#3f3f46] transition-all">
+              <div className="flex justify-between items-center mb-4">
+                <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block">Video Engine</label>
+                {isCameraActive && (
+                   <div className="flex items-center gap-1.5 text-[9px] font-black text-[#9146ff] bg-[#9146ff]/10 px-2 py-0.5 rounded border border-[#9146ff]/20">
+                     <Zap className="w-2.5 h-2.5 fill-current" /> {config.resolution.split('x')[1]}P @ {config.fps}
+                   </div>
+                )}
               </div>
-            </div>
-            <div className="bg-[#18181b] p-6 rounded-xl border border-[#26262b]">
-              <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-3 block flex justify-between">
-                <span>Audio Device</span>
-                {isCameraActive && !isCamAudioMuted && <span className="text-zinc-600 font-mono text-[9px]">{Math.round(audioLevel)}%</span>}
-              </label>
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-4">
                 <div className="flex gap-2">
                   <select 
-                    className="flex-1 bg-[#26262b] border border-[#3f3f46] rounded-lg px-4 py-2.5 text-sm outline-none cursor-pointer"
+                    className="flex-1 bg-[#26262b] border border-[#3f3f46] rounded-lg px-4 py-2.5 text-sm outline-none cursor-pointer focus:border-[#9146ff] transition-colors appearance-none"
+                    value={selectedVideo}
+                    onChange={(e) => { setSelectedVideo(e.target.value); if (isCameraActive) startCamera(); }}
+                  >
+                    {videoDevices.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+                  </select>
+                  <button onClick={enumerateMedia} className="p-2.5 bg-[#26262b] rounded-lg border border-[#3f3f46] hover:bg-[#3f3f46] transition-colors"><RefreshCcw className="w-4 h-4 text-zinc-400" /></button>
+                </div>
+                
+                {/* Video Signal Bar (Symmetry balancing) */}
+                <div className="h-4 w-full bg-[#0e0e10] rounded-sm overflow-hidden border border-[#26262b] p-[2px] flex gap-[2px]">
+                   {[...Array(24)].map((_, i) => (
+                     <div 
+                       key={i} 
+                       className={`flex-1 rounded-sm transition-all duration-300 ${isCameraActive && !isCamVideoMuted ? (i < 20 ? 'bg-[#9146ff]' : 'bg-[#9146ff] opacity-40') : 'bg-zinc-900 opacity-20'}`}
+                     />
+                   ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Audio Device Card */}
+            <div className="bg-[#18181b] p-6 rounded-xl border border-[#26262b] shadow-lg flex flex-col hover:border-[#3f3f46] transition-all">
+              <div className="flex justify-between items-center mb-4">
+                <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest block">Audio Engine</label>
+                {isCameraActive && !isCamAudioMuted && (
+                   <span className="text-[#9146ff] font-mono text-[9px] font-black bg-[#9146ff]/10 px-2 py-0.5 rounded border border-[#9146ff]/20">
+                     MONITOR: {Math.round(audioLevel)}%
+                   </span>
+                )}
+              </div>
+              <div className="flex flex-col gap-4">
+                <div className="flex gap-2">
+                  <select 
+                    className="flex-1 bg-[#26262b] border border-[#3f3f46] rounded-lg px-4 py-2.5 text-sm outline-none cursor-pointer focus:border-[#9146ff] transition-colors appearance-none"
                     value={selectedAudio}
                     onChange={(e) => { setSelectedAudio(e.target.value); if (isCameraActive) startCamera(); }}
                   >
                     {audioDevices.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
                   </select>
-                  <button onClick={enumerateMedia} className="p-2.5 bg-[#26262b] rounded-lg border border-[#3f3f46]"><RefreshCcw className="w-4 h-4" /></button>
+                  <button onClick={enumerateMedia} className="p-2.5 bg-[#26262b] rounded-lg border border-[#3f3f46] hover:bg-[#3f3f46] transition-colors"><RefreshCcw className="w-4 h-4 text-zinc-400" /></button>
                 </div>
                 
-                {/* Audio Monitor Meter */}
-                <div className="h-1.5 w-full bg-[#0e0e10] rounded-full overflow-hidden border border-[#26262b]">
-                   <div 
-                    className={`h-full transition-all duration-75 rounded-full ${isCamAudioMuted ? 'bg-zinc-800' : 'bg-gradient-to-r from-green-500 via-yellow-400 to-red-500'}`}
-                    style={{ 
-                      width: `${isCamAudioMuted ? 0 : audioLevel}%`,
-                      boxShadow: audioLevel > 80 ? '0 0 10px rgba(239, 68, 68, 0.4)' : 'none'
-                    }} 
-                  />
+                {/* Pro Segmented VU Meter */}
+                <div className="h-4 w-full bg-[#0e0e10] rounded-sm overflow-hidden border border-[#26262b] p-[2px] flex gap-[2px]">
+                   {[...Array(24)].map((_, i) => {
+                     const threshold = (i / 24) * 100;
+                     const isActive = !isCamAudioMuted && audioLevel > threshold;
+                     const colorClass = i > 18 ? 'bg-red-500' : i > 14 ? 'bg-yellow-400' : 'bg-green-500';
+                     return (
+                       <div 
+                         key={i} 
+                         className={`flex-1 rounded-sm transition-all duration-75 ${isActive ? colorClass : 'bg-zinc-900 opacity-20'} ${isActive && i > 18 ? 'shadow-[0_0_8px_rgba(239,68,68,0.5)]' : ''}`}
+                       />
+                     );
+                   })}
                 </div>
               </div>
             </div>
@@ -620,55 +677,71 @@ const App: React.FC = () => {
 
         <div className="lg:col-span-4 flex flex-col gap-6">
           <div className="bg-[#18181b] p-6 rounded-xl border border-[#26262b] shadow-xl">
-            <h3 className="text-xs font-bold uppercase tracking-widest flex items-center gap-2 mb-6 text-zinc-400"><Settings className="w-3.5 h-3.5" /> Stream Config</h3>
+            <h3 className="text-xs font-bold uppercase tracking-widest flex items-center gap-2 mb-6 text-zinc-400"><Settings className="w-3.5 h-3.5" /> Session Config</h3>
             <div className="space-y-6">
               <div>
-                <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-1.5 flex justify-between items-center">
-                  Twitch Key 
-                  <a href="https://dashboard.twitch.tv/settings/stream" target="_blank" rel="noreferrer" className="text-[#9146ff] hover:underline flex items-center gap-1">Dashboard <ExternalLink className="w-2.5 h-2.5" /></a>
+                <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-2 flex justify-between items-center">
+                  Twitch Stream Key 
+                  <a href="https://dashboard.twitch.tv/settings/stream" target="_blank" rel="noreferrer" className="text-[#9146ff] hover:underline flex items-center gap-1 font-black">GET KEY <ExternalLink className="w-2.5 h-2.5" /></a>
                 </label>
-                <input type="password" placeholder="Paste stream key here..." className="w-full bg-[#0e0e10] border border-[#26262b] rounded-lg px-4 py-2.5 text-sm font-mono focus:ring-1 focus:ring-[#9146ff] outline-none" value={config.streamKey} onChange={(e) => setConfig({...config, streamKey: e.target.value})} />
+                <input type="password" placeholder="live_12345_abcde..." className="w-full bg-[#0e0e10] border border-[#26262b] rounded-lg px-4 py-2.5 text-sm font-mono focus:border-[#9146ff] outline-none transition-colors" value={config.streamKey} onChange={(e) => setConfig({...config, streamKey: e.target.value})} />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-1.5">Canvas</label>
-                  <select className="w-full bg-[#0e0e10] border border-[#26262b] rounded-lg px-3 py-2 text-xs font-bold outline-none" value={config.resolution} onChange={(e) => setConfig({...config, resolution: e.target.value})}>
-                    <option value="1920x1080">1080p</option><option value="1280x720">720p</option>
+                  <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-1.5">Resolution</label>
+                  <select className="w-full bg-[#0e0e10] border border-[#26262b] rounded-lg px-3 py-2 text-xs font-bold outline-none cursor-pointer focus:border-[#9146ff]" value={config.resolution} onChange={(e) => setConfig({...config, resolution: e.target.value})}>
+                    <option value="1920x1080">1080p Full HD</option><option value="1280x720">720p HD Ready</option>
                   </select>
                 </div>
                 <div>
-                  <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-1.5">Target FPS</label>
-                  <select className="w-full bg-[#0e0e10] border border-[#26262b] rounded-lg px-3 py-2 text-xs font-bold outline-none" value={config.fps} onChange={(e) => setConfig({...config, fps: Number(e.target.value)})}>
-                    <option value="60">60 FPS</option><option value="30">30 FPS</option>
+                  <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-1.5">Target Framerate</label>
+                  <select className="w-full bg-[#0e0e10] border border-[#26262b] rounded-lg px-3 py-2 text-xs font-bold outline-none cursor-pointer focus:border-[#9146ff]" value={config.fps} onChange={(e) => setConfig({...config, fps: Number(e.target.value)})}>
+                    <option value="60">60 FPS Smooth</option><option value="30">30 FPS Standard</option>
                   </select>
                 </div>
               </div>
               <div>
-                <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-1.5 flex justify-between"><span>Bitrate</span><span className="text-[#9146ff]">{config.bitrate} kbps</span></label>
+                <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-1.5 flex justify-between"><span>Target Bitrate</span><span className="text-[#9146ff] font-black">{config.bitrate} KBPS</span></label>
                 <input type="range" min="1500" max="8000" step="500" className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-[#9146ff]" value={config.bitrate} onChange={(e) => setConfig({...config, bitrate: Number(e.target.value)})} />
               </div>
             </div>
           </div>
 
-          <div className="bg-[#0e0e10] rounded-xl border border-[#26262b] flex-1 flex flex-col min-h-[350px] overflow-hidden shadow-2xl">
-            <div className="bg-[#18181b] px-4 py-3 border-b border-[#26262b] flex items-center justify-between">
-              <span className="text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 text-zinc-400"><Terminal className="w-3.5 h-3.5" /> Engine Logs</span>
-              <button onClick={() => setLogs([])} className="text-[9px] text-zinc-600 hover:text-zinc-300 font-black">CLEAR</button>
+          <div className={`bg-[#0e0e10] rounded-xl border border-[#26262b] flex flex-col overflow-hidden shadow-2xl transition-all duration-300 ease-in-out ${isLogsMinimized ? 'h-auto' : 'flex-1 min-h-[350px]'}`}>
+            <div className="bg-[#18181b] px-4 py-3 border-b border-[#26262b] flex items-center justify-between group/header">
+              <div className="flex items-center gap-2 overflow-hidden">
+                <button 
+                  onClick={() => setIsLogsMinimized(!isLogsMinimized)}
+                  className="p-1 hover:bg-white/5 rounded transition-colors"
+                >
+                  {isLogsMinimized ? <ChevronUp className="w-3.5 h-3.5 text-zinc-500" /> : <ChevronDown className="w-3.5 h-3.5 text-zinc-500" />}
+                </button>
+                <span className="text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 text-zinc-400 whitespace-nowrap"><Terminal className="w-3.5 h-3.5" /> Engine Telemetry</span>
+              </div>
+              <div className={`flex items-center gap-3 transition-opacity duration-300 ${isLogsMinimized ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+                <button onClick={() => setLogs([])} className="text-[9px] text-zinc-600 hover:text-zinc-300 font-black tracking-tighter transition-colors">WIPE LOGS</button>
+              </div>
             </div>
-            <div ref={logContainerRef} className="flex-1 p-4 overflow-y-auto space-y-1.5 font-mono text-[11px] bg-black/40">
-              {logs.map((log, i) => (
-                <div key={i} className="flex gap-2.5 leading-relaxed">
-                  <span className="text-zinc-700">[{log.timestamp}]</span>
-                  <span className={`${log.level === 'error' ? 'text-red-500' : log.level === 'warn' ? 'text-yellow-500' : log.level === 'success' ? 'text-green-500' : 'text-zinc-400'}`}>{log.message}</span>
-                </div>
-              ))}
-            </div>
+            
+            {!isLogsMinimized && (
+              <div ref={logContainerRef} className="flex-1 p-4 overflow-y-auto space-y-2 font-mono text-[11px] bg-black/40">
+                {logs.length === 0 && (
+                  <div className="text-zinc-800 text-center py-12 italic uppercase tracking-widest text-[10px] font-black">Standby for telemetry...</div>
+                )}
+                {logs.map((log, i) => (
+                  <div key={i} className="flex gap-3 leading-relaxed animate-in fade-in slide-in-from-left-2 duration-300">
+                    <span className="text-zinc-700 shrink-0 font-bold">[{log.timestamp}]</span>
+                    <span className={`${log.level === 'error' ? 'text-red-500 font-bold' : log.level === 'warn' ? 'text-yellow-500' : log.level === 'success' ? 'text-green-500' : 'text-zinc-400'}`}>{log.message}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </main>
 
-      <footer className="text-center text-zinc-800 text-[9px] uppercase font-black tracking-[0.3em] py-8 border-t border-zinc-900 mt-6">
-        MediaTech Streamer 1.0 • Composite WHIP Engine • Direct PiP Controls • Track Muting
+      <footer className="text-center text-zinc-800 text-[9px] uppercase font-black tracking-[0.4em] py-8 border-t border-zinc-900/50 mt-6">
+        MediaTech WHIP Broadcast Core 1.1 • Ultra-Low Latency • 10-Bit Internal Pipeline
       </footer>
     </div>
   );
