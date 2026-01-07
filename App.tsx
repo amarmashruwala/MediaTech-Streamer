@@ -14,6 +14,9 @@ const App: React.FC = () => {
   const [selectedVideo, setSelectedVideo] = useState<string>('');
   const [selectedAudio, setSelectedAudio] = useState<string>('');
   
+  // Capability detection
+  const [canCaptureScreen, setCanCaptureScreen] = useState<boolean>(true);
+
   // Decoupled states
   const [isScreenPrimary, setIsScreenPrimary] = useState<boolean>(false);
   const [isPipEnabled, setIsPipEnabled] = useState<boolean>(false);
@@ -69,6 +72,19 @@ const App: React.FC = () => {
   const addLog = useCallback((entry: LogEntry) => {
     setLogs(prev => [...prev.slice(-99), entry]);
   }, []);
+
+  // Check for Screen Share support on mount
+  useEffect(() => {
+    const supported = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+    setCanCaptureScreen(supported);
+    if (!supported) {
+      addLog({ 
+        timestamp: new Date().toLocaleTimeString(), 
+        level: 'warn', 
+        message: 'Screen sharing is not supported on this device/browser (typical for mobile).' 
+      });
+    }
+  }, [addLog]);
 
   // Helper to draw images with "cover" behavior (maintaining aspect ratio)
   const drawImageCover = (
@@ -221,7 +237,6 @@ const App: React.FC = () => {
     const isPipMuted = isScreenPrimary ? isCamVideoMuted : isScreenVideoMuted;
 
     if (isMainActive && !isMainMuted && mainSource.readyState >= 2 && !mainSource.paused) {
-      // Use cover logic to prevent stretching
       drawImageCover(ctx, mainSource, 0, 0, width, height);
     }
 
@@ -237,9 +252,6 @@ const App: React.FC = () => {
       ctx.strokeStyle = '#9146ff';
       ctx.lineWidth = 4;
       ctx.strokeRect(px - 2, py - 2, pipW + 4, pipH + 4);
-      // Use drawImageCover for PIP too if desired, but standard drawImage works fine for small overlays
-      // if the target rect matches the source aspect ratio. 
-      // Here we calculated pipH based on pipSource.videoHeight/Width so standard is fine.
       ctx.drawImage(pipSource, px, py, pipW, pipH);
       ctx.restore();
     }
@@ -307,6 +319,10 @@ const App: React.FC = () => {
   };
 
   const startScreen = async () => {
+    if (!canCaptureScreen) {
+      addLog({ timestamp: new Date().toLocaleTimeString(), level: 'error', message: 'Screen capture is not available on this device.' });
+      return false;
+    }
     try {
       addLog({ timestamp: new Date().toLocaleTimeString(), level: 'info', message: 'Requesting screen capture...' });
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
@@ -331,6 +347,7 @@ const App: React.FC = () => {
   };
 
   const togglePrimaryView = async () => {
+    if (!canCaptureScreen) return;
     if (!isScreenPrimary) {
       if (!isScreenActive) {
         const success = await startScreen();
@@ -347,6 +364,10 @@ const App: React.FC = () => {
       if (isScreenPrimary) {
         if (!isCameraActive) await startCamera();
       } else {
+        if (!canCaptureScreen) {
+            addLog({ timestamp: new Date().toLocaleTimeString(), level: 'warn', message: 'Cannot enable Screen PiP: Feature not supported.' });
+            return;
+        }
         if (!isScreenActive) {
           const success = await startScreen();
           if (!success) return;
@@ -517,23 +538,25 @@ const App: React.FC = () => {
                 </button>
               </div>
 
-              <div className="flex bg-black/60 backdrop-blur-md p-1.5 rounded-lg border border-white/10 gap-1.5 items-center">
-                <span className="text-[9px] font-bold text-zinc-500 uppercase px-1">Screen</span>
-                <button 
-                  onClick={() => setIsScreenVideoMuted(!isScreenVideoMuted)}
-                  className={`p-1.5 rounded-md transition-all ${isScreenVideoMuted ? 'bg-red-500/20 text-red-500' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                  title={isScreenVideoMuted ? "Show Screen" : "Hide Screen"}
-                >
-                  {isScreenVideoMuted ? <MonitorOff className="w-3.5 h-3.5" /> : <Monitor className="w-3.5 h-3.5" />}
-                </button>
-                <button 
-                  onClick={() => setIsScreenAudioMuted(!isScreenAudioMuted)}
-                  className={`p-1.5 rounded-md transition-all ${isScreenAudioMuted ? 'bg-red-500/20 text-red-500' : 'bg-white/10 text-white hover:bg-white/20'}`}
-                  title={isScreenAudioMuted ? "Unmute Screen Audio" : "Mute Screen Audio"}
-                >
-                  {isScreenAudioMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-                </button>
-              </div>
+              {canCaptureScreen && (
+                <div className="flex bg-black/60 backdrop-blur-md p-1.5 rounded-lg border border-white/10 gap-1.5 items-center">
+                    <span className="text-[9px] font-bold text-zinc-500 uppercase px-1">Screen</span>
+                    <button 
+                    onClick={() => setIsScreenVideoMuted(!isScreenVideoMuted)}
+                    className={`p-1.5 rounded-md transition-all ${isScreenVideoMuted ? 'bg-red-500/20 text-red-500' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                    title={isScreenVideoMuted ? "Show Screen" : "Hide Screen"}
+                    >
+                    {isScreenVideoMuted ? <MonitorOff className="w-3.5 h-3.5" /> : <Monitor className="w-3.5 h-3.5" />}
+                    </button>
+                    <button 
+                    onClick={() => setIsScreenAudioMuted(!isScreenAudioMuted)}
+                    className={`p-1.5 rounded-md transition-all ${isScreenAudioMuted ? 'bg-red-500/20 text-red-500' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                    title={isScreenAudioMuted ? "Unmute Screen Audio" : "Mute Screen Audio"}
+                    >
+                    {isScreenAudioMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                    </button>
+                </div>
+              )}
             </div>
 
             <div className="absolute bottom-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -541,20 +564,22 @@ const App: React.FC = () => {
                 onClick={togglePip}
                 className={`p-3 rounded-full backdrop-blur-xl border border-white/20 transition-all ${
                   isPipEnabled ? 'bg-green-500 text-white' : 'bg-black/60 text-white hover:bg-black/80'
-                }`}
+                } ${!canCaptureScreen && !isScreenPrimary ? 'opacity-50 cursor-not-allowed' : ''}`}
                 title="Toggle Picture-in-Picture"
               >
                 <Layers className="w-5 h-5" />
               </button>
-              <button 
-                onClick={togglePrimaryView}
-                className={`p-3 rounded-full backdrop-blur-xl border border-white/20 transition-all ${
-                  isScreenPrimary ? 'bg-[#9146ff] text-white' : 'bg-black/60 text-white hover:bg-black/80'
-                }`}
-                title={isScreenPrimary ? "Switch to Camera Background" : "Switch to Screen Background"}
-              >
-                {isScreenPrimary ? <Camera className="w-5 h-5" /> : <Monitor className="w-5 h-5" />}
-              </button>
+              {canCaptureScreen && (
+                <button 
+                    onClick={togglePrimaryView}
+                    className={`p-3 rounded-full backdrop-blur-xl border border-white/20 transition-all ${
+                    isScreenPrimary ? 'bg-[#9146ff] text-white' : 'bg-black/60 text-white hover:bg-black/80'
+                    }`}
+                    title={isScreenPrimary ? "Switch to Camera Background" : "Switch to Screen Background"}
+                >
+                    {isScreenPrimary ? <Camera className="w-5 h-5" /> : <Monitor className="w-5 h-5" />}
+                </button>
+              )}
             </div>
 
             {!isCameraActive && !isScreenActive && (
@@ -668,7 +693,7 @@ const App: React.FC = () => {
       </main>
 
       <footer className="text-center text-zinc-800 text-[9px] uppercase font-black tracking-[0.3em] py-8 border-t border-zinc-900 mt-6">
-        MediaTech Streamer 1.0 • Composite WHIP Engine • Direct PiP Controls • Track Muting
+        MediaTech Streamer 1.0 • Composite WHIP Engine • Mobile Optimized • Track Muting
       </footer>
     </div>
   );
