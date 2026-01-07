@@ -33,6 +33,8 @@ export interface StreamConfig {
   resolution: string;
   bitrate: number;
   fps: number;
+  streamType: 'twitch' | 'custom';
+  customEndpoint?: string;
 }
 
 export interface DeviceInfo {

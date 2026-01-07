@@ -3,7 +3,8 @@ import {
   Camera, Mic, Activity, RefreshCcw, Terminal, Monitor, 
   Layers, Video, Volume2, VolumeX, ChevronDown, ChevronUp, 
   Zap, Radio, Cpu, SlidersHorizontal, Sun, Moon, Palette,
-  MessageSquare, User, ShieldCheck, Crown, Wifi, Repeat, Settings2
+  MessageSquare, User, ShieldCheck, Crown, Wifi, Repeat, Settings2,
+  Globe, Server
 } from 'lucide-react';
 import { StreamStatus, LogEntry, StreamConfig, DeviceInfo, Theme, ChatMessage } from './types';
 import { WHIPClient } from './services/whipClient';
@@ -46,7 +47,6 @@ const App: React.FC = () => {
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
   const [isScreenActive, setIsScreenActive] = useState<boolean>(false);
 
-  // Coordinates calculated for 0.5 inch (48px) margins at 1080p
   const [pipX, setPipX] = useState(0.865);
   const [pipY, setPipY] = useState(0.154);
   const [pipSize, setPipSize] = useState(0.22);
@@ -56,7 +56,9 @@ const App: React.FC = () => {
     streamKey: '',
     resolution: '1920x1080',
     bitrate: 4500,
-    fps: 30
+    fps: 30,
+    streamType: 'twitch',
+    customEndpoint: ''
   });
 
   const addLog = useCallback((entry: LogEntry) => {
@@ -117,26 +119,22 @@ const App: React.FC = () => {
   const compositeStreamRef = useRef<MediaStream | null>(null);
   const whipClientRef = useRef<WHIPClient | null>(null);
   
-  // Web Audio refs for volume control and metering
   const audioContextRef = useRef<AudioContext | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
   const analyserNodeRef = useRef<AnalyserNode | null>(null);
   const audioDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
 
-  // Audio metering loop
   useEffect(() => {
     let animationFrame: number;
     const updateMeter = () => {
       if (analyserNodeRef.current && isCameraActive) {
         const dataArray = new Uint8Array(analyserNodeRef.current.fftSize);
         analyserNodeRef.current.getByteTimeDomainData(dataArray);
-        
         let max = 0;
         for (let i = 0; i < dataArray.length; i++) {
           const amplitude = Math.abs(dataArray[i] - 128);
           if (amplitude > max) max = amplitude;
         }
-        // Normalize max (0-128) to 0-1
         setAudioLevel(max / 128);
       } else {
         setAudioLevel(0);
@@ -150,48 +148,29 @@ const App: React.FC = () => {
   const composite = useCallback((timestamp: number) => {
     const fpsInterval = 1000 / config.fps;
     const elapsed = timestamp - lastFrameTimeRef.current;
-
     if (elapsed < fpsInterval) {
       requestRef.current = requestAnimationFrame(composite);
       return;
     }
-
     lastFrameTimeRef.current = timestamp - (elapsed % fpsInterval);
-
-    const ctx = canvasRef.current.getContext('2d', { 
-      alpha: false,
-      desynchronized: true,
-      willReadFrequently: false 
-    });
-    
+    const ctx = canvasRef.current.getContext('2d', { alpha: false, desynchronized: true });
     if (!ctx) return;
-    
     const w = canvasRef.current.width;
     const h = canvasRef.current.height;
-
     const bgColor = theme === 'light' ? '#f4f4f5' : theme === 'midnight' ? '#020617' : '#09090b';
     ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, w, h);
-
     let effectiveScreenPrimary = isScreenPrimary;
     if (isScreenActive && !isCameraActive) effectiveScreenPrimary = true;
     if (isCameraActive && !isScreenActive) effectiveScreenPrimary = false;
-
     const mainSource = effectiveScreenPrimary ? screenVideoEl.current : camVideoEl.current;
     const pipSource = effectiveScreenPrimary ? camVideoEl.current : screenVideoEl.current;
     const isMainActive = effectiveScreenPrimary ? isScreenActive : isCameraActive;
     const isPipActive = effectiveScreenPrimary ? isCameraActive : isScreenActive;
-
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'low'; 
-
     if (isMainActive && mainSource.readyState >= 2 && mainSource.videoWidth > 0) {
       const ratio = Math.max(w / mainSource.videoWidth, h / mainSource.videoHeight);
-      const drawWidth = mainSource.videoWidth * ratio;
-      const drawHeight = mainSource.videoHeight * ratio;
-      ctx.drawImage(mainSource, (w - drawWidth) / 2, (h - drawHeight) / 2, drawWidth, drawHeight);
+      ctx.drawImage(mainSource, (w - mainSource.videoWidth * ratio) / 2, (h - mainSource.videoHeight * ratio) / 2, mainSource.videoWidth * ratio, mainSource.videoHeight * ratio);
     }
-
     if (isPipEnabled && isPipActive && pipSource.readyState >= 2 && pipSource.videoWidth > 0) {
       const pW = w * pipSize;
       const pH = pW * (9 / 16);
@@ -202,7 +181,6 @@ const App: React.FC = () => {
       ctx.drawImage(pipSource, (w * pipX) - (pW / 2), (h * pipY) - (pH / 2), pW, pH);
       ctx.restore();
     }
-    
     requestRef.current = requestAnimationFrame(composite);
   }, [isScreenPrimary, isPipEnabled, pipX, pipY, pipSize, isCameraActive, isScreenActive, theme, config.fps]);
 
@@ -210,178 +188,91 @@ const App: React.FC = () => {
     const [w, h] = config.resolution.split('x').map(Number);
     canvasRef.current.width = w;
     canvasRef.current.height = h;
-
     const newStream = canvasRef.current.captureStream(config.fps);
-    
     if (compositeStreamRef.current) {
-        compositeStreamRef.current.getAudioTracks().forEach(track => {
-            newStream.addTrack(track);
-        });
+        compositeStreamRef.current.getAudioTracks().forEach(track => newStream.addTrack(track));
     }
-
     compositeStreamRef.current = newStream;
-
-    if (videoPreviewRef.current) {
-      videoPreviewRef.current.srcObject = compositeStreamRef.current;
-    }
-
+    if (videoPreviewRef.current) videoPreviewRef.current.srcObject = compositeStreamRef.current;
     requestRef.current = requestAnimationFrame(composite);
     return () => { if (requestRef.current) cancelAnimationFrame(requestRef.current); };
   }, [config.resolution, config.fps, composite]);
 
-  // Update GainNode when volume/mute state changes
   useEffect(() => {
-    if (gainNodeRef.current) {
-      gainNodeRef.current.gain.setTargetAtTime(isMuted ? 0 : audioVolume, 0, 0.05);
-    }
+    if (gainNodeRef.current) gainNodeRef.current.gain.setTargetAtTime(isMuted ? 0 : audioVolume, 0, 0.05);
   }, [audioVolume, isMuted]);
 
   const toggleScreenShare = async () => {
     if (isScreenActive) {
-      if (screenStreamRef.current) {
-        screenStreamRef.current.getTracks().forEach(t => t.stop());
-        screenStreamRef.current = null;
-      }
+      if (screenStreamRef.current) screenStreamRef.current.getTracks().forEach(t => t.stop());
       setIsScreenActive(false);
-      addLog({ timestamp: new Date().toLocaleTimeString(), level: 'info', message: 'Screen capture ended.' });
     } else {
       try {
         const [targetWidth, targetHeight] = config.resolution.split('x').map(Number);
         const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: { 
-            width: { ideal: targetWidth },
-            height: { ideal: targetHeight },
-            frameRate: { ideal: config.fps } 
-          },
+          video: { width: { ideal: targetWidth }, height: { ideal: targetHeight }, frameRate: { ideal: config.fps } },
           audio: true
         });
-        
-        const videoTrack = stream.getVideoTracks()[0];
-        videoTrack.onended = () => {
-          setIsScreenActive(false);
-          screenStreamRef.current = null;
-        };
-        
-        if ('contentHint' in videoTrack) {
-          // @ts-ignore
-          videoTrack.contentHint = 'text';
-        }
-
         screenStreamRef.current = stream;
         screenVideoEl.current.srcObject = stream;
-        
         const audioTrack = stream.getAudioTracks()[0];
-        if (audioTrack && compositeStreamRef.current) {
-          compositeStreamRef.current.addTrack(audioTrack);
-        }
-
+        if (audioTrack && compositeStreamRef.current) compositeStreamRef.current.addTrack(audioTrack);
         await screenVideoEl.current.play();
         setIsScreenActive(true);
-        addLog({ timestamp: new Date().toLocaleTimeString(), level: 'success', message: 'Screen capture active.' });
-      } catch (err) {
-        addLog({ timestamp: new Date().toLocaleTimeString(), level: 'error', message: 'Screen capture failed.' });
-      }
+      } catch (err) { addLog({ timestamp: new Date().toLocaleTimeString(), level: 'error', message: 'Screen share failed.' }); }
     }
   };
 
   useEffect(() => {
     let mounted = true;
-
     const startCamera = async () => {
-      if (cameraStreamRef.current) {
-        cameraStreamRef.current.getTracks().forEach(t => t.stop());
-      }
-
+      if (cameraStreamRef.current) cameraStreamRef.current.getTracks().forEach(t => t.stop());
       if (!isCameraActive) return;
-
       try {
         const [targetWidth, targetHeight] = config.resolution.split('x').map(Number);
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { 
-            deviceId: selectedVideo ? { exact: selectedVideo } : undefined,
-            width: { ideal: targetWidth },
-            height: { ideal: targetHeight },
-            frameRate: { ideal: config.fps }
-          },
+          video: { deviceId: selectedVideo ? { exact: selectedVideo } : undefined, width: { ideal: targetWidth }, height: { ideal: targetHeight }, frameRate: { ideal: config.fps } },
           audio: { deviceId: selectedAudio ? { exact: selectedAudio } : undefined }
         });
-
-        if (!mounted) {
-          stream.getTracks().forEach(t => t.stop());
-          return;
-        }
-
+        if (!mounted) { stream.getTracks().forEach(t => t.stop()); return; }
         cameraStreamRef.current = stream;
         camVideoEl.current.srcObject = stream;
         await camVideoEl.current.play();
-
-        // Audio Processing Logic
         if (stream.getAudioTracks().length > 0) {
-          if (!audioContextRef.current) {
-            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-          }
-          
+          if (!audioContextRef.current) audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
           const ctx = audioContextRef.current;
           if (ctx.state === 'suspended') await ctx.resume();
-
           const source = ctx.createMediaStreamSource(stream);
           gainNodeRef.current = ctx.createGain();
           gainNodeRef.current.gain.value = isMuted ? 0 : audioVolume;
-          
           analyserNodeRef.current = ctx.createAnalyser();
-          analyserNodeRef.current.fftSize = 256;
-
           audioDestRef.current = ctx.createMediaStreamDestination();
-          
           source.connect(gainNodeRef.current);
           gainNodeRef.current.connect(analyserNodeRef.current);
           analyserNodeRef.current.connect(audioDestRef.current);
-
           const processedTrack = audioDestRef.current.stream.getAudioTracks()[0];
-          
           if (compositeStreamRef.current) {
-            // Remove existing audio tracks to avoid duplicates
             compositeStreamRef.current.getAudioTracks().forEach(t => compositeStreamRef.current?.removeTrack(t));
             compositeStreamRef.current.addTrack(processedTrack);
           }
         }
-
-        addLog({ timestamp: new Date().toLocaleTimeString(), level: 'success', message: 'Optical & Audio feeds stable.' });
-      } catch (err) {
-        addLog({ timestamp: new Date().toLocaleTimeString(), level: 'error', message: 'Hardware capture failed.' });
-        setIsCameraActive(false);
-      }
+      } catch (err) { setIsCameraActive(false); }
     };
-
     startCamera();
     return () => { mounted = false; };
   }, [isCameraActive, selectedVideo, selectedAudio, config.fps, config.resolution]);
 
   const onConnectionStateChange = useCallback((state: RTCIceConnectionState) => {
-    if ((state === 'failed' || state === 'disconnected') && isStreamingIntent.current) {
-      handleReconnect();
-    }
+    if ((state === 'failed' || state === 'disconnected') && isStreamingIntent.current) handleReconnect();
   }, []);
 
   const handleReconnect = useCallback(() => {
-    if (retryCount >= 5) {
-      addLog({ timestamp: new Date().toLocaleTimeString(), level: 'error', message: 'Stream recovery aborted.' });
-      isStreamingIntent.current = false;
-      setStatus(StreamStatus.ERROR);
-      return;
-    }
-
+    if (retryCount >= 5) { setStatus(StreamStatus.ERROR); return; }
     if (retryTimerRef.current) window.clearTimeout(retryTimerRef.current);
-
     const backoffDelay = Math.min(1000 * Math.pow(2, retryCount), 10000);
     setRetryCount(prev => prev + 1);
-    
-    retryTimerRef.current = window.setTimeout(() => {
-      if (isStreamingIntent.current) {
-        handleBroadcast(true);
-      }
-    }, backoffDelay);
-  }, [retryCount, addLog]);
+    retryTimerRef.current = window.setTimeout(() => { if (isStreamingIntent.current) handleBroadcast(true); }, backoffDelay);
+  }, [retryCount]);
 
   const handleBroadcast = async (isAutoRetry = false) => {
     if (!isAutoRetry) {
@@ -397,37 +288,29 @@ const App: React.FC = () => {
     }
 
     if (!config.streamKey) {
-      addLog({ timestamp: new Date().toLocaleTimeString(), level: 'warn', message: 'Auth required.' });
+      addLog({ timestamp: new Date().toLocaleTimeString(), level: 'warn', message: 'Stream Key required.' });
       isStreamingIntent.current = false;
       return;
     }
-    
-    if (!isCameraActive && !isScreenActive) {
-      setIsCameraActive(true);
-      await new Promise(r => setTimeout(r, 1000));
+
+    const endpoint = config.streamType === 'twitch' ? TWITCH_WHIP_URL : config.customEndpoint;
+    if (!endpoint) {
+      addLog({ timestamp: new Date().toLocaleTimeString(), level: 'warn', message: 'Ingest URL required for custom mode.' });
+      isStreamingIntent.current = false;
+      return;
     }
     
     try {
       if (!compositeStreamRef.current) throw new Error("Fault");
       setStatus(StreamStatus.CONNECTING);
-      
       whipClientRef.current?.stop();
-      
-      whipClientRef.current = new WHIPClient(
-        TWITCH_WHIP_URL, 
-        config.streamKey, 
-        addLog,
-        onConnectionStateChange
-      );
-      
+      whipClientRef.current = new WHIPClient(endpoint, config.streamKey, addLog, onConnectionStateChange);
       await whipClientRef.current.start(compositeStreamRef.current, config.bitrate);
       setStatus(StreamStatus.STREAMING);
       setRetryCount(0);
     } catch (e) { 
       setStatus(StreamStatus.ERROR); 
-      if (isStreamingIntent.current) {
-        handleReconnect();
-      }
+      if (isStreamingIntent.current) handleReconnect();
     }
   };
 
@@ -479,7 +362,6 @@ const App: React.FC = () => {
               </h3>
               <select className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs text-[var(--studio-text)] outline-none focus:border-[var(--accent)]" value={selectedVideo} onChange={e => setSelectedVideo(e.target.value)}>
                  {videoDevices.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
-                 {videoDevices.length === 0 && <option value="">No cameras found</option>}
               </select>
             </div>
             <div className="bg-[var(--studio-panel)] p-4 rounded-xl border border-[var(--studio-border)] shadow-sm hover:border-[var(--accent)] transition-all">
@@ -489,26 +371,13 @@ const App: React.FC = () => {
               <div className="space-y-3">
                 <select className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs text-[var(--studio-text)] outline-none focus:border-[var(--accent)]" value={selectedAudio} onChange={e => setSelectedAudio(e.target.value)}>
                    {audioDevices.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
-                   {audioDevices.length === 0 && <option value="">No microphones found</option>}
                 </select>
-
-                {/* Audio Level Meter */}
                 <div className="h-2 w-full bg-black/40 rounded-full overflow-hidden flex items-center px-1 border border-[var(--studio-border)]">
-                   <div 
-                     className="h-1 rounded-full transition-all duration-75 bg-gradient-to-r from-emerald-500 via-yellow-500 to-red-500" 
-                     style={{ width: `${Math.min(audioLevel * 100, 100)}%`, opacity: audioLevel > 0.01 ? 1 : 0.3 }}
-                   />
+                   <div className="h-1 rounded-full transition-all duration-75 bg-gradient-to-r from-emerald-500 via-yellow-500 to-red-500" style={{ width: `${Math.min(audioLevel * 100, 100)}%`, opacity: audioLevel > 0.01 ? 1 : 0.3 }} />
                 </div>
-
                 <div className="flex items-center gap-3 bg-black/10 p-2 rounded-lg">
-                  <button onClick={() => setIsMuted(!isMuted)} className={`p-2 rounded-md transition-colors ${isMuted ? 'text-red-500 bg-red-500/10' : 'text-zinc-400 hover:text-white'}`}>
-                    {isMuted || audioVolume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-                  </button>
-                  <input 
-                    type="range" min="0" max="1" step="0.01" value={audioVolume} 
-                    onChange={e => setAudioVolume(parseFloat(e.target.value))} 
-                    className="flex-1 h-1 bg-[var(--studio-border)] rounded-lg appearance-none cursor-pointer accent-[var(--accent)]" 
-                  />
+                  <button onClick={() => setIsMuted(!isMuted)} className={`p-2 rounded-md transition-colors ${isMuted ? 'text-red-500 bg-red-500/10' : 'text-zinc-400 hover:text-white'}`}><Volume2 className="w-4 h-4" /></button>
+                  <input type="range" min="0" max="1" step="0.01" value={audioVolume} onChange={e => setAudioVolume(parseFloat(e.target.value))} className="flex-1 h-1 bg-[var(--studio-border)] rounded-lg appearance-none cursor-pointer accent-[var(--accent)]" />
                   <span className="text-[10px] font-mono text-zinc-500 w-8 text-right">{Math.round(audioVolume * 100)}%</span>
                 </div>
               </div>
@@ -526,8 +395,42 @@ const App: React.FC = () => {
             </div>
             {!isDestinationMinimized && (
               <div className="mt-4 space-y-4">
-                <input type="text" placeholder="Twitch User" className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs text-[var(--studio-text)] outline-none focus:border-[var(--accent)]" value={config.channelName} onChange={e => setConfig({...config, channelName: e.target.value})} />
-                <input type="password" placeholder="Twitch Link Key" className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs font-mono text-[var(--studio-text)] outline-none focus:border-[var(--accent)]" value={config.streamKey} onChange={e => setConfig({...config, streamKey: e.target.value})} />
+                <div className="flex p-1 bg-black/20 rounded-lg border border-[var(--studio-border)]">
+                  <button 
+                    onClick={() => setConfig({...config, streamType: 'twitch'})}
+                    className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md text-[10px] font-bold uppercase transition-all ${config.streamType === 'twitch' ? 'bg-[var(--accent)] text-white' : 'text-[var(--studio-text-muted)] hover:text-[var(--studio-text)]'}`}
+                  >
+                    <Globe className="w-3 h-3" /> Twitch
+                  </button>
+                  <button 
+                    onClick={() => setConfig({...config, streamType: 'custom'})}
+                    className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md text-[10px] font-bold uppercase transition-all ${config.streamType === 'custom' ? 'bg-[var(--accent)] text-white' : 'text-[var(--studio-text-muted)] hover:text-[var(--studio-text)]'}`}
+                  >
+                    <Server className="w-3 h-3" /> Custom/RTMP
+                  </button>
+                </div>
+
+                {config.streamType === 'twitch' ? (
+                  <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold uppercase text-[var(--studio-text-muted)] ml-1">Channel Name</label>
+                      <input type="text" placeholder="Twitch User" className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs text-[var(--studio-text)] outline-none focus:border-[var(--accent)]" value={config.channelName} onChange={e => setConfig({...config, channelName: e.target.value})} />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold uppercase text-[var(--studio-text-muted)] ml-1">Ingest URL (WHIP Bridge)</label>
+                      <input type="text" placeholder="https://ingest.provider.com/..." className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs text-[var(--studio-text)] outline-none focus:border-[var(--accent)]" value={config.customEndpoint} onChange={e => setConfig({...config, customEndpoint: e.target.value})} />
+                      <p className="text-[8px] text-[var(--studio-text-muted)] mt-1 ml-1 leading-tight">Requires a WHIP-to-RTMP bridge (e.g. Dolby.io, Cloudflare, SRS)</p>
+                    </div>
+                  </div>
+                )}
+                
+                <div className="space-y-1">
+                  <label className="text-[9px] font-bold uppercase text-[var(--studio-text-muted)] ml-1">Stream Key</label>
+                  <input type="password" placeholder="live_..." className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs font-mono text-[var(--studio-text)] outline-none focus:border-[var(--accent)]" value={config.streamKey} onChange={e => setConfig({...config, streamKey: e.target.value})} />
+                </div>
               </div>
             )}
           </section>
@@ -574,27 +477,29 @@ const App: React.FC = () => {
             )}
           </section>
 
-          <section className={`flex flex-col transition-all duration-300 ${isChatMinimized ? 'h-auto' : 'h-[350px]'}`}>
-            <div className="flex items-center justify-between cursor-pointer group mb-2" onClick={() => setIsChatMinimized(!isChatMinimized)}>
-              <h4 className="text-[10px] font-black uppercase tracking-widest text-[var(--studio-text-muted)] flex items-center gap-2 transition-colors"><MessageSquare className="w-3.5 h-3.5" /> Community Feed</h4>
-              {isChatMinimized ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-            </div>
-            {!isChatMinimized && (
-              <div className="flex-1 bg-black/20 border border-[var(--studio-border)] rounded-xl overflow-hidden flex flex-col shadow-inner min-h-0">
-                <div ref={chatScrollRef} className="flex-1 p-3 overflow-y-auto custom-scrollbar space-y-2">
-                  {chatMessages.map(msg => (
-                    <div key={msg.id} className="text-[11px] leading-tight">
-                      <span style={{ color: msg.color }} className="font-bold">{msg.displayName}:</span> <span className="text-zinc-300">{msg.message}</span>
-                    </div>
-                  ))}
-                  {chatMessages.length === 0 && <p className="text-[10px] text-center text-zinc-600 mt-8 italic px-4">Silent feed...</p>}
-                </div>
-                <button onClick={toggleChat} className="p-3 text-[9px] font-black uppercase tracking-widest border-t border-[var(--studio-border)] hover:bg-[var(--accent)] hover:text-white transition-all text-[var(--studio-text)] shrink-0">
-                  {chatStatus === 'connected' ? 'Terminate Chat' : 'Synchronize Chat'}
-                </button>
+          {config.streamType === 'twitch' && (
+            <section className={`flex flex-col transition-all duration-300 ${isChatMinimized ? 'h-auto' : 'h-[350px]'}`}>
+              <div className="flex items-center justify-between cursor-pointer group mb-2" onClick={() => setIsChatMinimized(!isChatMinimized)}>
+                <h4 className="text-[10px] font-black uppercase tracking-widest text-[var(--studio-text-muted)] flex items-center gap-2 transition-colors"><MessageSquare className="w-3.5 h-3.5" /> Community Feed</h4>
+                {isChatMinimized ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
               </div>
-            )}
-          </section>
+              {!isChatMinimized && (
+                <div className="flex-1 bg-black/20 border border-[var(--studio-border)] rounded-xl overflow-hidden flex flex-col shadow-inner min-h-0">
+                  <div ref={chatScrollRef} className="flex-1 p-3 overflow-y-auto custom-scrollbar space-y-2">
+                    {chatMessages.map(msg => (
+                      <div key={msg.id} className="text-[11px] leading-tight">
+                        <span style={{ color: msg.color }} className="font-bold">{msg.displayName}:</span> <span className="text-zinc-300">{msg.message}</span>
+                      </div>
+                    ))}
+                    {chatMessages.length === 0 && <p className="text-[10px] text-center text-zinc-600 mt-8 italic px-4">Silent feed...</p>}
+                  </div>
+                  <button onClick={toggleChat} className="p-3 text-[9px] font-black uppercase tracking-widest border-t border-[var(--studio-border)] hover:bg-[var(--accent)] hover:text-white transition-all text-[var(--studio-text)] shrink-0">
+                    {chatStatus === 'connected' ? 'Terminate Chat' : 'Synchronize Chat'}
+                  </button>
+                </div>
+              )}
+            </section>
+          )}
         </div>
 
         <div className={`border-t border-[var(--studio-border)] flex flex-col transition-all duration-300 ${isLogsMinimized ? 'h-12' : 'h-40'}`}>
