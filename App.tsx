@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Camera, Mic, Activity, RefreshCcw, Terminal, Monitor, 
-  Layers, Video, Volume2, ChevronDown, ChevronUp, 
+  Layers, Video, Volume2, VolumeX, ChevronDown, ChevronUp, 
   Zap, Radio, Cpu, SlidersHorizontal, Sun, Moon, Palette,
   MessageSquare, User, ShieldCheck, Crown, Wifi, Repeat, Settings2
 } from 'lucide-react';
@@ -18,6 +18,9 @@ const App: React.FC = () => {
   const [audioDevices, setAudioDevices] = useState<DeviceInfo[]>([]);
   const [selectedVideo, setSelectedVideo] = useState<string>('');
   const [selectedAudio, setSelectedAudio] = useState<string>('');
+  const [audioVolume, setAudioVolume] = useState<number>(1);
+  const [audioLevel, setAudioLevel] = useState<number>(0);
+  const [isMuted, setIsMuted] = useState<boolean>(false);
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem('studio-theme') as Theme) || 'dark');
   
   // Reconnection State
@@ -44,8 +47,6 @@ const App: React.FC = () => {
   const [isScreenActive, setIsScreenActive] = useState<boolean>(false);
 
   // Coordinates calculated for 0.5 inch (48px) margins at 1080p
-  // pipX: (1920 - 48 - (1920 * 0.22 / 2)) / 1920 = ~0.865
-  // pipY: (48 + (1080 * 0.22 * (9/16) / 2)) / 1080 = ~0.154
   const [pipX, setPipX] = useState(0.865);
   const [pipY, setPipY] = useState(0.154);
   const [pipSize, setPipSize] = useState(0.22);
@@ -115,6 +116,36 @@ const App: React.FC = () => {
   const screenStreamRef = useRef<MediaStream | null>(null);
   const compositeStreamRef = useRef<MediaStream | null>(null);
   const whipClientRef = useRef<WHIPClient | null>(null);
+  
+  // Web Audio refs for volume control and metering
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
+  const analyserNodeRef = useRef<AnalyserNode | null>(null);
+  const audioDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+
+  // Audio metering loop
+  useEffect(() => {
+    let animationFrame: number;
+    const updateMeter = () => {
+      if (analyserNodeRef.current && isCameraActive) {
+        const dataArray = new Uint8Array(analyserNodeRef.current.fftSize);
+        analyserNodeRef.current.getByteTimeDomainData(dataArray);
+        
+        let max = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          const amplitude = Math.abs(dataArray[i] - 128);
+          if (amplitude > max) max = amplitude;
+        }
+        // Normalize max (0-128) to 0-1
+        setAudioLevel(max / 128);
+      } else {
+        setAudioLevel(0);
+      }
+      animationFrame = requestAnimationFrame(updateMeter);
+    };
+    updateMeter();
+    return () => cancelAnimationFrame(animationFrame);
+  }, [isCameraActive]);
 
   const composite = useCallback((timestamp: number) => {
     const fpsInterval = 1000 / config.fps;
@@ -195,14 +226,15 @@ const App: React.FC = () => {
     }
 
     requestRef.current = requestAnimationFrame(composite);
-    addLog({ 
-      timestamp: new Date().toLocaleTimeString(), 
-      level: 'info', 
-      message: `Canvas reconfigured: ${config.resolution} @ ${config.fps}fps` 
-    });
-
     return () => { if (requestRef.current) cancelAnimationFrame(requestRef.current); };
   }, [config.resolution, config.fps, composite]);
+
+  // Update GainNode when volume/mute state changes
+  useEffect(() => {
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.setTargetAtTime(isMuted ? 0 : audioVolume, 0, 0.05);
+    }
+  }, [audioVolume, isMuted]);
 
   const toggleScreenShare = async () => {
     if (isScreenActive) {
@@ -228,7 +260,6 @@ const App: React.FC = () => {
         videoTrack.onended = () => {
           setIsScreenActive(false);
           screenStreamRef.current = null;
-          addLog({ timestamp: new Date().toLocaleTimeString(), level: 'info', message: 'User terminated screen share.' });
         };
         
         if ('contentHint' in videoTrack) {
@@ -246,9 +277,9 @@ const App: React.FC = () => {
 
         await screenVideoEl.current.play();
         setIsScreenActive(true);
-        addLog({ timestamp: new Date().toLocaleTimeString(), level: 'success', message: 'Screen capture optimized and active.' });
+        addLog({ timestamp: new Date().toLocaleTimeString(), level: 'success', message: 'Screen capture active.' });
       } catch (err) {
-        addLog({ timestamp: new Date().toLocaleTimeString(), level: 'error', message: 'Screen capture failed or blocked.' });
+        addLog({ timestamp: new Date().toLocaleTimeString(), level: 'error', message: 'Screen capture failed.' });
       }
     }
   };
@@ -284,24 +315,47 @@ const App: React.FC = () => {
         camVideoEl.current.srcObject = stream;
         await camVideoEl.current.play();
 
-        const micTrack = stream.getAudioTracks()[0];
-        if (micTrack && compositeStreamRef.current) {
-          const currentAudio = compositeStreamRef.current.getAudioTracks();
-          if (currentAudio.length === 0) {
-            compositeStreamRef.current.addTrack(micTrack);
+        // Audio Processing Logic
+        if (stream.getAudioTracks().length > 0) {
+          if (!audioContextRef.current) {
+            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+          }
+          
+          const ctx = audioContextRef.current;
+          if (ctx.state === 'suspended') await ctx.resume();
+
+          const source = ctx.createMediaStreamSource(stream);
+          gainNodeRef.current = ctx.createGain();
+          gainNodeRef.current.gain.value = isMuted ? 0 : audioVolume;
+          
+          analyserNodeRef.current = ctx.createAnalyser();
+          analyserNodeRef.current.fftSize = 256;
+
+          audioDestRef.current = ctx.createMediaStreamDestination();
+          
+          source.connect(gainNodeRef.current);
+          gainNodeRef.current.connect(analyserNodeRef.current);
+          analyserNodeRef.current.connect(audioDestRef.current);
+
+          const processedTrack = audioDestRef.current.stream.getAudioTracks()[0];
+          
+          if (compositeStreamRef.current) {
+            // Remove existing audio tracks to avoid duplicates
+            compositeStreamRef.current.getAudioTracks().forEach(t => compositeStreamRef.current?.removeTrack(t));
+            compositeStreamRef.current.addTrack(processedTrack);
           }
         }
 
-        addLog({ timestamp: new Date().toLocaleTimeString(), level: 'success', message: 'Camera performance link stable.' });
+        addLog({ timestamp: new Date().toLocaleTimeString(), level: 'success', message: 'Optical & Audio feeds stable.' });
       } catch (err) {
-        addLog({ timestamp: new Date().toLocaleTimeString(), level: 'error', message: 'Camera device unavailable.' });
+        addLog({ timestamp: new Date().toLocaleTimeString(), level: 'error', message: 'Hardware capture failed.' });
         setIsCameraActive(false);
       }
     };
 
     startCamera();
     return () => { mounted = false; };
-  }, [isCameraActive, selectedVideo, selectedAudio, config.fps, config.resolution, addLog]);
+  }, [isCameraActive, selectedVideo, selectedAudio, config.fps, config.resolution]);
 
   const onConnectionStateChange = useCallback((state: RTCIceConnectionState) => {
     if ((state === 'failed' || state === 'disconnected') && isStreamingIntent.current) {
@@ -311,7 +365,7 @@ const App: React.FC = () => {
 
   const handleReconnect = useCallback(() => {
     if (retryCount >= 5) {
-      addLog({ timestamp: new Date().toLocaleTimeString(), level: 'error', message: 'Max reconnection attempts reached. Stream terminated.' });
+      addLog({ timestamp: new Date().toLocaleTimeString(), level: 'error', message: 'Stream recovery aborted.' });
       isStreamingIntent.current = false;
       setStatus(StreamStatus.ERROR);
       return;
@@ -322,12 +376,6 @@ const App: React.FC = () => {
     const backoffDelay = Math.min(1000 * Math.pow(2, retryCount), 10000);
     setRetryCount(prev => prev + 1);
     
-    addLog({ 
-      timestamp: new Date().toLocaleTimeString(), 
-      level: 'warn', 
-      message: `Transport lost. Attempting recovery ${retryCount + 1}/5 in ${(backoffDelay/1000).toFixed(1)}s...` 
-    });
-
     retryTimerRef.current = window.setTimeout(() => {
       if (isStreamingIntent.current) {
         handleBroadcast(true);
@@ -349,7 +397,7 @@ const App: React.FC = () => {
     }
 
     if (!config.streamKey) {
-      addLog({ timestamp: new Date().toLocaleTimeString(), level: 'warn', message: 'Auth token missing.' });
+      addLog({ timestamp: new Date().toLocaleTimeString(), level: 'warn', message: 'Auth required.' });
       isStreamingIntent.current = false;
       return;
     }
@@ -360,7 +408,7 @@ const App: React.FC = () => {
     }
     
     try {
-      if (!compositeStreamRef.current) throw new Error("Composition fault");
+      if (!compositeStreamRef.current) throw new Error("Fault");
       setStatus(StreamStatus.CONNECTING);
       
       whipClientRef.current?.stop();
@@ -406,12 +454,6 @@ const App: React.FC = () => {
                 <span className="text-[10px] font-black uppercase tracking-widest">Live</span>
               </div>
             )}
-            {status === StreamStatus.CONNECTING && retryCount > 0 && (
-              <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-500">
-                <div className="w-2 h-2 rounded-full bg-amber-500 status-pulse" />
-                <span className="text-[10px] font-black uppercase tracking-widest">Recovering</span>
-              </div>
-            )}
           </div>
           <button onClick={() => handleBroadcast()} className={`px-8 h-10 rounded-lg font-bold text-xs uppercase tracking-widest transition-all ${status === StreamStatus.STREAMING ? 'bg-[var(--studio-border)] text-[var(--studio-text)]' : 'bg-[var(--accent)] text-white shadow-xl hover:scale-[1.02] active:scale-[0.98]'}`}>
             {status === StreamStatus.STREAMING ? 'End Stream' : status === StreamStatus.CONNECTING ? 'Connecting...' : 'Go Live'}
@@ -422,35 +464,11 @@ const App: React.FC = () => {
           <div className="relative w-full max-w-5xl aspect-video rounded-2xl bg-black shadow-[0_0_50px_rgba(0,0,0,0.5)] overflow-hidden border border-[var(--studio-border)] group">
             <video ref={videoPreviewRef} autoPlay muted playsInline className="w-full h-full object-contain" />
             <div className="absolute bottom-8 left-1/2 -translate-x-1/2 px-6 py-3 bg-black/40 backdrop-blur-2xl rounded-2xl flex items-center gap-4 opacity-0 group-hover:opacity-100 transition-all border border-white/10 shadow-2xl scale-95 group-hover:scale-100">
-              <button 
-                onClick={() => setIsCameraActive(!isCameraActive)} 
-                className={`p-3 rounded-xl transition-all hover:scale-110 ${isCameraActive ? 'bg-zinc-800 text-white shadow-lg' : 'bg-red-500/20 text-red-500'}`}
-                title={isCameraActive ? "Stop Camera" : "Start Camera"}
-              >
-                <Camera className="w-5 h-5" />
-              </button>
-              <button 
-                onClick={toggleScreenShare} 
-                className={`p-3 rounded-xl transition-all hover:scale-110 ${isScreenActive ? 'bg-zinc-800 text-white shadow-lg' : 'bg-zinc-600/20 text-zinc-400'}`}
-                title={isScreenActive ? "Stop Screen Share" : "Start Screen Share"}
-              >
-                <Monitor className="w-5 h-5" />
-              </button>
+              <button onClick={() => setIsCameraActive(!isCameraActive)} className={`p-3 rounded-xl transition-all hover:scale-110 ${isCameraActive ? 'bg-zinc-800 text-white' : 'bg-red-500/20 text-red-500'}`} title="Camera"><Camera className="w-5 h-5" /></button>
+              <button onClick={toggleScreenShare} className={`p-3 rounded-xl transition-all hover:scale-110 ${isScreenActive ? 'bg-zinc-800 text-white' : 'bg-zinc-600/20 text-zinc-400'}`} title="Screen"><Monitor className="w-5 h-5" /></button>
               <div className="w-px h-6 bg-white/10 mx-1" />
-              <button 
-                onClick={() => setIsScreenPrimary(!isScreenPrimary)} 
-                className={`p-3 rounded-xl transition-all hover:scale-110 bg-zinc-800 text-white shadow-lg`}
-                title="Swap Main Source"
-              >
-                <Repeat className="w-5 h-5" />
-              </button>
-              <button 
-                onClick={() => setIsPipEnabled(!isPipEnabled)} 
-                className={`p-3 rounded-xl transition-all hover:scale-110 ${isPipEnabled ? 'bg-[var(--accent)] text-white shadow-lg shadow-[var(--accent-glow)]' : 'bg-zinc-800 text-white'}`}
-                title="Toggle Picture-in-Picture"
-              >
-                <Layers className="w-5 h-5" />
-              </button>
+              <button onClick={() => setIsScreenPrimary(!isScreenPrimary)} className={`p-3 rounded-xl transition-all hover:scale-110 bg-zinc-800 text-white`} title="Swap"><Repeat className="w-5 h-5" /></button>
+              <button onClick={() => setIsPipEnabled(!isPipEnabled)} className={`p-3 rounded-xl transition-all hover:scale-110 ${isPipEnabled ? 'bg-[var(--accent)] text-white shadow-lg shadow-[var(--accent-glow)]' : 'bg-zinc-800 text-white'}`} title="PiP"><Layers className="w-5 h-5" /></button>
             </div>
           </div>
 
@@ -459,11 +477,7 @@ const App: React.FC = () => {
               <h3 className="text-[10px] font-bold uppercase tracking-widest text-[var(--studio-text-muted)] mb-2 flex items-center gap-2">
                 <Video className="w-3 h-3 text-[var(--accent)]" /> Optical Source
               </h3>
-              <select 
-                className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs text-[var(--studio-text)] outline-none focus:border-[var(--accent)] transition-colors cursor-pointer" 
-                value={selectedVideo} 
-                onChange={e => setSelectedVideo(e.target.value)}
-              >
+              <select className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs text-[var(--studio-text)] outline-none focus:border-[var(--accent)]" value={selectedVideo} onChange={e => setSelectedVideo(e.target.value)}>
                  {videoDevices.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
                  {videoDevices.length === 0 && <option value="">No cameras found</option>}
               </select>
@@ -472,14 +486,32 @@ const App: React.FC = () => {
               <h3 className="text-[10px] font-bold uppercase tracking-widest text-[var(--studio-text-muted)] mb-2 flex items-center gap-2">
                 <Volume2 className="w-3 h-3 text-[var(--accent)]" /> Audio Feed
               </h3>
-              <select 
-                className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs text-[var(--studio-text)] outline-none focus:border-[var(--accent)] transition-colors cursor-pointer" 
-                value={selectedAudio} 
-                onChange={e => setSelectedAudio(e.target.value)}
-              >
-                 {audioDevices.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
-                 {audioDevices.length === 0 && <option value="">No microphones found</option>}
-              </select>
+              <div className="space-y-3">
+                <select className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs text-[var(--studio-text)] outline-none focus:border-[var(--accent)]" value={selectedAudio} onChange={e => setSelectedAudio(e.target.value)}>
+                   {audioDevices.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+                   {audioDevices.length === 0 && <option value="">No microphones found</option>}
+                </select>
+
+                {/* Audio Level Meter */}
+                <div className="h-2 w-full bg-black/40 rounded-full overflow-hidden flex items-center px-1 border border-[var(--studio-border)]">
+                   <div 
+                     className="h-1 rounded-full transition-all duration-75 bg-gradient-to-r from-emerald-500 via-yellow-500 to-red-500" 
+                     style={{ width: `${Math.min(audioLevel * 100, 100)}%`, opacity: audioLevel > 0.01 ? 1 : 0.3 }}
+                   />
+                </div>
+
+                <div className="flex items-center gap-3 bg-black/10 p-2 rounded-lg">
+                  <button onClick={() => setIsMuted(!isMuted)} className={`p-2 rounded-md transition-colors ${isMuted ? 'text-red-500 bg-red-500/10' : 'text-zinc-400 hover:text-white'}`}>
+                    {isMuted || audioVolume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                  </button>
+                  <input 
+                    type="range" min="0" max="1" step="0.01" value={audioVolume} 
+                    onChange={e => setAudioVolume(parseFloat(e.target.value))} 
+                    className="flex-1 h-1 bg-[var(--studio-border)] rounded-lg appearance-none cursor-pointer accent-[var(--accent)]" 
+                  />
+                  <span className="text-[10px] font-mono text-zinc-500 w-8 text-right">{Math.round(audioVolume * 100)}%</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -510,23 +542,14 @@ const App: React.FC = () => {
                 <div className="p-3 bg-black/20 rounded-xl border border-[var(--studio-border)] space-y-3">
                   <div className="space-y-1">
                     <label className="text-[9px] font-bold uppercase text-[var(--studio-text-muted)]">Output Resolution</label>
-                    <select 
-                      className="w-full bg-black/40 border border-[var(--studio-border)] rounded-lg px-2 py-1.5 text-[10px] text-[var(--studio-text)] outline-none focus:border-[var(--accent)]"
-                      value={config.resolution}
-                      onChange={e => setConfig({...config, resolution: e.target.value})}
-                    >
-                      <option value="1920x1080">1080p (1920x1080)</option>
-                      <option value="1280x720">720p (1280x720)</option>
-                      <option value="960x540">540p (960x540)</option>
+                    <select className="w-full bg-black/40 border border-[var(--studio-border)] rounded-lg px-2 py-1.5 text-[10px] text-[var(--studio-text)] outline-none" value={config.resolution} onChange={e => setConfig({...config, resolution: e.target.value})}>
+                      <option value="1920x1080">1080p</option>
+                      <option value="1280x720">720p</option>
                     </select>
                   </div>
                   <div className="space-y-1">
                     <label className="text-[9px] font-bold uppercase text-[var(--studio-text-muted)]">Target Framerate</label>
-                    <select 
-                      className="w-full bg-black/40 border border-[var(--studio-border)] rounded-lg px-2 py-1.5 text-[10px] text-[var(--studio-text)] outline-none focus:border-[var(--accent)]"
-                      value={config.fps}
-                      onChange={e => setConfig({...config, fps: parseInt(e.target.value)})}
-                    >
+                    <select className="w-full bg-black/40 border border-[var(--studio-border)] rounded-lg px-2 py-1.5 text-[10px] text-[var(--studio-text)] outline-none" value={config.fps} onChange={e => setConfig({...config, fps: parseInt(e.target.value)})}>
                       <option value="30">30 FPS</option>
                       <option value="60">60 FPS</option>
                     </select>
@@ -553,18 +576,18 @@ const App: React.FC = () => {
 
           <section className={`flex flex-col transition-all duration-300 ${isChatMinimized ? 'h-auto' : 'h-[350px]'}`}>
             <div className="flex items-center justify-between cursor-pointer group mb-2" onClick={() => setIsChatMinimized(!isChatMinimized)}>
-              <h4 className="text-[10px] font-black uppercase tracking-widest text-[var(--studio-text-muted)] flex items-center gap-2 group-hover:text-[var(--studio-text)] transition-colors"><MessageSquare className="w-3.5 h-3.5" /> Community Feed</h4>
+              <h4 className="text-[10px] font-black uppercase tracking-widest text-[var(--studio-text-muted)] flex items-center gap-2 transition-colors"><MessageSquare className="w-3.5 h-3.5" /> Community Feed</h4>
               {isChatMinimized ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             </div>
             {!isChatMinimized && (
               <div className="flex-1 bg-black/20 border border-[var(--studio-border)] rounded-xl overflow-hidden flex flex-col shadow-inner min-h-0">
                 <div ref={chatScrollRef} className="flex-1 p-3 overflow-y-auto custom-scrollbar space-y-2">
                   {chatMessages.map(msg => (
-                    <div key={msg.id} className="text-[11px] leading-tight animate-in fade-in slide-in-from-bottom-2 duration-300">
+                    <div key={msg.id} className="text-[11px] leading-tight">
                       <span style={{ color: msg.color }} className="font-bold">{msg.displayName}:</span> <span className="text-zinc-300">{msg.message}</span>
                     </div>
                   ))}
-                  {chatMessages.length === 0 && <p className="text-[10px] text-center text-zinc-600 mt-8 italic px-4">Establishing secure chat link...</p>}
+                  {chatMessages.length === 0 && <p className="text-[10px] text-center text-zinc-600 mt-8 italic px-4">Silent feed...</p>}
                 </div>
                 <button onClick={toggleChat} className="p-3 text-[9px] font-black uppercase tracking-widest border-t border-[var(--studio-border)] hover:bg-[var(--accent)] hover:text-white transition-all text-[var(--studio-text)] shrink-0">
                   {chatStatus === 'connected' ? 'Terminate Chat' : 'Synchronize Chat'}
