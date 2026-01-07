@@ -30,6 +30,9 @@ const App: React.FC = () => {
   const [pipX, setPipX] = useState(0.75);
   const [pipY, setPipY] = useState(0.75);
   const [pipSize, setPipSize] = useState(0.25);
+
+  // Audio Monitoring
+  const [audioLevel, setAudioLevel] = useState<number>(0);
   
   const [config, setConfig] = useState<StreamConfig>({
     streamKey: '',
@@ -56,6 +59,9 @@ const App: React.FC = () => {
   const screenVideoEl = useRef<HTMLVideoElement>(document.createElement('video'));
   const canvasRef = useRef<HTMLCanvasElement>(document.createElement('canvas'));
   const requestRef = useRef<number | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioAnalyserRef = useRef<AnalyserNode | null>(null);
+  const audioAnimRef = useRef<number | null>(null);
   
   const whipClientRef = useRef<WHIPClient | null>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
@@ -64,7 +70,53 @@ const App: React.FC = () => {
     setLogs(prev => [...prev.slice(-99), entry]);
   }, []);
 
-  // Initialization
+  // Audio Monitoring Logic
+  const startAudioMonitoring = useCallback((stream: MediaStream) => {
+    if (audioAnimRef.current) cancelAnimationFrame(audioAnimRef.current);
+    
+    try {
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+      
+      const ctx = audioContextRef.current;
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      audioAnalyserRef.current = analyser;
+
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      const updateMeter = () => {
+        if (!audioAnalyserRef.current) return;
+        audioAnalyserRef.current.getByteFrequencyData(dataArray);
+        
+        let sum = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          sum += dataArray[i];
+        }
+        const average = sum / bufferLength;
+        const normalized = Math.min(100, (average / 128) * 100);
+        setAudioLevel(normalized);
+        audioAnimRef.current = requestAnimationFrame(updateMeter);
+      };
+
+      updateMeter();
+    } catch (err) {
+      console.error('Audio monitoring failed', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (audioAnimRef.current) cancelAnimationFrame(audioAnimRef.current);
+      if (audioContextRef.current) audioContextRef.current.close();
+    };
+  }, []);
+
+  // Initialization & Resolution Management
   useEffect(() => {
     const setupVideo = (el: HTMLVideoElement) => {
       el.muted = true;
@@ -77,6 +129,12 @@ const App: React.FC = () => {
     const [w, h] = config.resolution.split('x').map(Number);
     canvasRef.current.width = w;
     canvasRef.current.height = h;
+    
+    addLog({ timestamp: new Date().toLocaleTimeString(), level: 'info', message: `Canvas resized to ${config.resolution}` });
+
+    if (isCameraActive) {
+      startCamera();
+    }
 
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
@@ -123,20 +181,19 @@ const App: React.FC = () => {
     const mainSource = isScreenPrimary ? screenVideoEl.current : camVideoEl.current;
     const pipSource = isScreenPrimary ? camVideoEl.current : screenVideoEl.current;
     
+    const isMainActive = isScreenPrimary ? isScreenActive : isCameraActive;
+    const isPipActive = isScreenPrimary ? isCameraActive : isScreenActive;
+
     const isMainMuted = isScreenPrimary ? isScreenVideoMuted : isCamVideoMuted;
     const isPipMuted = isScreenPrimary ? isCamVideoMuted : isScreenVideoMuted;
 
-    // Draw Main
-    if (!isMainMuted && mainSource.readyState >= 2 && !mainSource.paused) {
+    if (isMainActive && !isMainMuted && mainSource.readyState >= 2 && !mainSource.paused) {
       ctx.drawImage(mainSource, 0, 0, width, height);
     }
 
-    // Draw PiP Overlay with dynamic coords
-    if (isPipEnabled && !isPipMuted && pipSource.readyState >= 2 && !pipSource.paused) {
+    if (isPipEnabled && isPipActive && !isPipMuted && pipSource.readyState >= 2 && !pipSource.paused) {
       const pipW = width * pipSize;
       const pipH = (pipSource.videoHeight / pipSource.videoWidth) * pipW;
-      
-      // Map normalized coordinates (centered) to top-left for canvas drawing
       const px = (width * pipX) - (pipW / 2);
       const py = (height * pipY) - (pipH / 2);
 
@@ -151,14 +208,13 @@ const App: React.FC = () => {
     }
 
     requestRef.current = requestAnimationFrame(composite);
-  }, [isScreenPrimary, isPipEnabled, pipX, pipY, pipSize, isCamVideoMuted, isScreenVideoMuted]);
+  }, [isScreenPrimary, isPipEnabled, pipX, pipY, pipSize, isCamVideoMuted, isScreenVideoMuted, config.resolution, isCameraActive, isScreenActive]);
 
   useEffect(() => {
     if (requestRef.current) cancelAnimationFrame(requestRef.current);
     requestRef.current = requestAnimationFrame(composite);
   }, [composite]);
 
-  // Handle track muting
   useEffect(() => {
     if (cameraStreamRef.current) {
       cameraStreamRef.current.getAudioTracks().forEach(t => t.enabled = !isCamAudioMuted);
@@ -178,12 +234,11 @@ const App: React.FC = () => {
       compositeStreamRef.current = canvasRef.current.captureStream(config.fps);
     }
 
-    // We only take audio from the camera for now as primary mix
-    // Screen audio is usually ignored or requires complex mixing logic
-    const existingAudio = compositeStreamRef.current.getAudioTracks();
     const cameraAudio = cameraStreamRef.current?.getAudioTracks() || [];
-    
-    if (cameraAudio.length > 0 && existingAudio.length === 0) {
+    const currentTracks = compositeStreamRef.current.getAudioTracks();
+
+    if (cameraAudio.length > 0 && (currentTracks.length === 0 || currentTracks[0].id !== cameraAudio[0].id)) {
+      currentTracks.forEach(t => compositeStreamRef.current?.removeTrack(t));
       compositeStreamRef.current.addTrack(cameraAudio[0]);
     }
 
@@ -207,6 +262,7 @@ const App: React.FC = () => {
       await camVideoEl.current.play();
       setIsCameraActive(true);
       updateCompositeStream();
+      startAudioMonitoring(stream);
       addLog({ timestamp: new Date().toLocaleTimeString(), level: 'success', message: 'Camera active.' });
     } catch (err) {
       addLog({ timestamp: new Date().toLocaleTimeString(), level: 'error', message: 'Camera error: ' + (err as Error).message });
@@ -265,7 +321,6 @@ const App: React.FC = () => {
     }
   };
 
-  // Interaction Handlers
   const handleMouseDown = (e: React.MouseEvent, type: 'drag' | 'resize') => {
     if (!isPipEnabled) return;
     e.preventDefault();
@@ -375,7 +430,6 @@ const App: React.FC = () => {
           >
             <video ref={videoPreviewRef} autoPlay muted playsInline className="w-full h-full object-cover pointer-events-none" />
             
-            {/* PiP Interaction Handles */}
             {isPipEnabled && (
               <div 
                 className="absolute border-2 border-dashed border-[#9146ff]/50 bg-[#9146ff]/10 cursor-move group/pip"
@@ -392,7 +446,6 @@ const App: React.FC = () => {
                 <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover/pip:opacity-100 transition-opacity">
                   <Move className="text-white w-6 h-6 drop-shadow-lg" />
                 </div>
-                {/* Resize Handle */}
                 <div 
                   className="absolute -right-2 -bottom-2 w-6 h-6 bg-[#9146ff] rounded-full flex items-center justify-center cursor-nwse-resize shadow-lg active:scale-125 transition-transform"
                   onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize'); }}
@@ -409,7 +462,6 @@ const App: React.FC = () => {
             </div>
 
             <div className="absolute bottom-4 left-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-              {/* Camera Mute Toggles */}
               <div className="flex bg-black/60 backdrop-blur-md p-1.5 rounded-lg border border-white/10 gap-1.5 items-center">
                 <span className="text-[9px] font-bold text-zinc-500 uppercase px-1">Cam</span>
                 <button 
@@ -428,7 +480,6 @@ const App: React.FC = () => {
                 </button>
               </div>
 
-              {/* Screen Mute Toggles */}
               <div className="flex bg-black/60 backdrop-blur-md p-1.5 rounded-lg border border-white/10 gap-1.5 items-center">
                 <span className="text-[9px] font-bold text-zinc-500 uppercase px-1">Screen</span>
                 <button 
@@ -499,16 +550,32 @@ const App: React.FC = () => {
               </div>
             </div>
             <div className="bg-[#18181b] p-6 rounded-xl border border-[#26262b]">
-              <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-3 block">Audio Device</label>
-              <div className="flex gap-2">
-                <select 
-                  className="flex-1 bg-[#26262b] border border-[#3f3f46] rounded-lg px-4 py-2.5 text-sm outline-none cursor-pointer"
-                  value={selectedAudio}
-                  onChange={(e) => { setSelectedAudio(e.target.value); if (isCameraActive) startCamera(); }}
-                >
-                  {audioDevices.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
-                </select>
-                <button onClick={enumerateMedia} className="p-2.5 bg-[#26262b] rounded-lg border border-[#3f3f46]"><RefreshCcw className="w-4 h-4" /></button>
+              <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-3 block flex justify-between">
+                <span>Audio Device</span>
+                {isCameraActive && !isCamAudioMuted && <span className="text-zinc-600 font-mono text-[9px]">{Math.round(audioLevel)}%</span>}
+              </label>
+              <div className="flex flex-col gap-3">
+                <div className="flex gap-2">
+                  <select 
+                    className="flex-1 bg-[#26262b] border border-[#3f3f46] rounded-lg px-4 py-2.5 text-sm outline-none cursor-pointer"
+                    value={selectedAudio}
+                    onChange={(e) => { setSelectedAudio(e.target.value); if (isCameraActive) startCamera(); }}
+                  >
+                    {audioDevices.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+                  </select>
+                  <button onClick={enumerateMedia} className="p-2.5 bg-[#26262b] rounded-lg border border-[#3f3f46]"><RefreshCcw className="w-4 h-4" /></button>
+                </div>
+                
+                {/* Audio Monitor Meter */}
+                <div className="h-1.5 w-full bg-[#0e0e10] rounded-full overflow-hidden border border-[#26262b]">
+                   <div 
+                    className={`h-full transition-all duration-75 rounded-full ${isCamAudioMuted ? 'bg-zinc-800' : 'bg-gradient-to-r from-green-500 via-yellow-400 to-red-500'}`}
+                    style={{ 
+                      width: `${isCamAudioMuted ? 0 : audioLevel}%`,
+                      boxShadow: audioLevel > 80 ? '0 0 10px rgba(239, 68, 68, 0.4)' : 'none'
+                    }} 
+                  />
+                </div>
               </div>
             </div>
           </div>
