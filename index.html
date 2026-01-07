@@ -1,25 +1,60 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MediaTech Streamer</title>
+    <title>MediaTech | Professional WHIP Broadcast Studio</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- VDO.Ninja SDK for simplified media management and production-ready constraints -->
-    <script src="https://sdk.vdo.ninja/v1/sdk.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
     <style>
-        body {
-            background-color: #0e0e10;
-            color: #efeff1;
-            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        :root {
+            --studio-bg: #09090b;
+            --studio-card: #18181b;
+            --studio-border: #27272a;
+            --accent: #6366f1;
+            --accent-glow: rgba(99, 102, 241, 0.3);
         }
-        .twitch-purple { background-color: #9146ff; }
-        .twitch-purple-hover:hover { background-color: #772ce8; }
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: #18181b; }
-        ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: #52525b; }
+
+        body {
+            background-color: var(--studio-bg);
+            color: #fafafa;
+            font-family: 'Inter', sans-serif;
+            letter-spacing: -0.01em;
+        }
+
+        .studio-glass {
+            background: rgba(24, 24, 27, 0.8);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .vu-meter-segment {
+            transition: background-color 0.1s ease;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 5px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #3f3f46;
+            border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #52525b;
+        }
+
+        /* Sophisticated UI Animations */
+        @keyframes pulse-ring {
+            0% { transform: scale(0.95); opacity: 1; }
+            50% { transform: scale(1.1); opacity: 0.5; }
+            100% { transform: scale(0.95); opacity: 1; }
+        }
+        .status-pulse {
+            animation: pulse-ring 2s infinite ease-in-out;
+        }
     </style>
 <script type="importmap">
 {
@@ -32,7 +67,7 @@
 }
 </script>
 </head>
-<body>
+<body class="overflow-hidden">
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
 </body>
