@@ -70,6 +70,39 @@ const App: React.FC = () => {
     setLogs(prev => [...prev.slice(-99), entry]);
   }, []);
 
+  // Helper to draw images with "cover" behavior (maintaining aspect ratio)
+  const drawImageCover = (
+    ctx: CanvasRenderingContext2D, 
+    img: HTMLVideoElement, 
+    x: number, 
+    y: number, 
+    w: number, 
+    h: number
+  ) => {
+    const imgW = img.videoWidth;
+    const imgH = img.videoHeight;
+    if (!imgW || !imgH) return;
+
+    const imgRatio = imgW / imgH;
+    const targetRatio = w / h;
+    
+    let sx, sy, sw, sh;
+    
+    if (imgRatio > targetRatio) {
+      sw = imgH * targetRatio;
+      sh = imgH;
+      sx = (imgW - sw) / 2;
+      sy = 0;
+    } else {
+      sw = imgW;
+      sh = imgW / targetRatio;
+      sx = 0;
+      sy = (imgH - sh) / 2;
+    }
+    
+    ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+  };
+
   // Audio Monitoring Logic
   const startAudioMonitoring = useCallback((stream: MediaStream) => {
     if (audioAnimRef.current) cancelAnimationFrame(audioAnimRef.current);
@@ -188,7 +221,8 @@ const App: React.FC = () => {
     const isPipMuted = isScreenPrimary ? isCamVideoMuted : isScreenVideoMuted;
 
     if (isMainActive && !isMainMuted && mainSource.readyState >= 2 && !mainSource.paused) {
-      ctx.drawImage(mainSource, 0, 0, width, height);
+      // Use cover logic to prevent stretching
+      drawImageCover(ctx, mainSource, 0, 0, width, height);
     }
 
     if (isPipEnabled && isPipActive && !isPipMuted && pipSource.readyState >= 2 && !pipSource.paused) {
@@ -203,6 +237,9 @@ const App: React.FC = () => {
       ctx.strokeStyle = '#9146ff';
       ctx.lineWidth = 4;
       ctx.strokeRect(px - 2, py - 2, pipW + 4, pipH + 4);
+      // Use drawImageCover for PIP too if desired, but standard drawImage works fine for small overlays
+      // if the target rect matches the source aspect ratio. 
+      // Here we calculated pipH based on pipSource.videoHeight/Width so standard is fine.
       ctx.drawImage(pipSource, px, py, pipW, pipH);
       ctx.restore();
     }
