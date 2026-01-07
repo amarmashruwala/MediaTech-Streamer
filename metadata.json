@@ -1,0 +1,9 @@
+{
+  "name": "MediaTech Streamer",
+  "description": "A production-ready WebRTC streaming application that broadcasts directly to Twitch using the WHIP protocol and VDO.Ninja SDK for media management.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "display-capture"
+  ]
+}
