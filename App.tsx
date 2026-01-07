@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Camera, Mic, Activity, RefreshCcw, Terminal, Monitor, 
-  Layers, Video, Volume2, VolumeX, ChevronDown, ChevronUp, 
+  Layers, Video as VideoIcon, Volume2, VolumeX, ChevronDown, ChevronUp, 
   Zap, Radio, Cpu, SlidersHorizontal, Sun, Moon, Palette,
   MessageSquare, User, ShieldCheck, Crown, Wifi, Repeat, Settings2,
-  Globe, Server
+  Globe, Server, Link, ExternalLink, Maximize, Move
 } from 'lucide-react';
 import { StreamStatus, LogEntry, StreamConfig, DeviceInfo, Theme, ChatMessage } from './types';
 import { WHIPClient } from './services/whipClient';
@@ -110,6 +110,7 @@ const App: React.FC = () => {
 
   const camVideoEl = useRef<HTMLVideoElement>(Object.assign(document.createElement('video'), { muted: true, autoplay: true, playsInline: true }));
   const screenVideoEl = useRef<HTMLVideoElement>(Object.assign(document.createElement('video'), { muted: true, autoplay: true, playsInline: true }));
+  
   const canvasRef = useRef<HTMLCanvasElement>(document.createElement('canvas'));
   const requestRef = useRef<number | null>(null);
   const lastFrameTimeRef = useRef<number>(0);
@@ -127,6 +128,7 @@ const App: React.FC = () => {
   useEffect(() => {
     let animationFrame: number;
     const updateMeter = () => {
+      // Update Mic/Main Meter
       if (analyserNodeRef.current && isCameraActive) {
         const dataArray = new Uint8Array(analyserNodeRef.current.fftSize);
         analyserNodeRef.current.getByteTimeDomainData(dataArray);
@@ -160,17 +162,23 @@ const App: React.FC = () => {
     const bgColor = theme === 'light' ? '#f4f4f5' : theme === 'midnight' ? '#020617' : '#09090b';
     ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, w, h);
+
     let effectiveScreenPrimary = isScreenPrimary;
     if (isScreenActive && !isCameraActive) effectiveScreenPrimary = true;
     if (isCameraActive && !isScreenActive) effectiveScreenPrimary = false;
+
     const mainSource = effectiveScreenPrimary ? screenVideoEl.current : camVideoEl.current;
     const pipSource = effectiveScreenPrimary ? camVideoEl.current : screenVideoEl.current;
     const isMainActive = effectiveScreenPrimary ? isScreenActive : isCameraActive;
     const isPipActive = effectiveScreenPrimary ? isCameraActive : isScreenActive;
+
+    // Draw Main Source
     if (isMainActive && mainSource.readyState >= 2 && mainSource.videoWidth > 0) {
       const ratio = Math.max(w / mainSource.videoWidth, h / mainSource.videoHeight);
       ctx.drawImage(mainSource, (w - mainSource.videoWidth * ratio) / 2, (h - mainSource.videoHeight * ratio) / 2, mainSource.videoWidth * ratio, mainSource.videoHeight * ratio);
     }
+
+    // Draw PiP
     if (isPipEnabled && isPipActive && pipSource.readyState >= 2 && pipSource.videoWidth > 0) {
       const pW = w * pipSize;
       const pH = pW * (9 / 16);
@@ -247,9 +255,11 @@ const App: React.FC = () => {
           gainNodeRef.current.gain.value = isMuted ? 0 : audioVolume;
           analyserNodeRef.current = ctx.createAnalyser();
           audioDestRef.current = ctx.createMediaStreamDestination();
+          
           source.connect(gainNodeRef.current);
           gainNodeRef.current.connect(analyserNodeRef.current);
           analyserNodeRef.current.connect(audioDestRef.current);
+          
           const processedTrack = audioDestRef.current.stream.getAudioTracks()[0];
           if (compositeStreamRef.current) {
             compositeStreamRef.current.getAudioTracks().forEach(t => compositeStreamRef.current?.removeTrack(t));
@@ -295,7 +305,7 @@ const App: React.FC = () => {
 
     const endpoint = config.streamType === 'twitch' ? TWITCH_WHIP_URL : config.customEndpoint;
     if (!endpoint) {
-      addLog({ timestamp: new Date().toLocaleTimeString(), level: 'warn', message: 'Ingest URL required for custom mode.' });
+      addLog({ timestamp: new Date().toLocaleTimeString(), level: 'warn', message: 'Ingest URL required.' });
       isStreamingIntent.current = false;
       return;
     }
@@ -358,7 +368,7 @@ const App: React.FC = () => {
           <div className="w-full max-w-5xl grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-[var(--studio-panel)] p-4 rounded-xl border border-[var(--studio-border)] shadow-sm hover:border-[var(--accent)] transition-all">
               <h3 className="text-[10px] font-bold uppercase tracking-widest text-[var(--studio-text-muted)] mb-2 flex items-center gap-2">
-                <Video className="w-3 h-3 text-[var(--accent)]" /> Optical Source
+                <VideoIcon className="w-3 h-3 text-[var(--accent)]" /> Optical Source
               </h3>
               <select className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs text-[var(--studio-text)] outline-none focus:border-[var(--accent)]" value={selectedVideo} onChange={e => setSelectedVideo(e.target.value)}>
                  {videoDevices.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
@@ -396,41 +406,15 @@ const App: React.FC = () => {
             {!isDestinationMinimized && (
               <div className="mt-4 space-y-4">
                 <div className="flex p-1 bg-black/20 rounded-lg border border-[var(--studio-border)]">
-                  <button 
-                    onClick={() => setConfig({...config, streamType: 'twitch'})}
-                    className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md text-[10px] font-bold uppercase transition-all ${config.streamType === 'twitch' ? 'bg-[var(--accent)] text-white' : 'text-[var(--studio-text-muted)] hover:text-[var(--studio-text)]'}`}
-                  >
-                    <Globe className="w-3 h-3" /> Twitch
-                  </button>
-                  <button 
-                    onClick={() => setConfig({...config, streamType: 'custom'})}
-                    className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md text-[10px] font-bold uppercase transition-all ${config.streamType === 'custom' ? 'bg-[var(--accent)] text-white' : 'text-[var(--studio-text-muted)] hover:text-[var(--studio-text)]'}`}
-                  >
-                    <Server className="w-3 h-3" /> Custom/RTMP
-                  </button>
+                  <button onClick={() => setConfig({...config, streamType: 'twitch'})} className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md text-[10px] font-bold uppercase transition-all ${config.streamType === 'twitch' ? 'bg-[var(--accent)] text-white' : 'text-[var(--studio-text-muted)] hover:text-[var(--studio-text)]'}`}><Globe className="w-3 h-3" /> Twitch</button>
+                  <button onClick={() => setConfig({...config, streamType: 'custom'})} className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md text-[10px] font-bold uppercase transition-all ${config.streamType === 'custom' ? 'bg-[var(--accent)] text-white' : 'text-[var(--studio-text-muted)] hover:text-[var(--studio-text)]'}`}><Server className="w-3 h-3" /> Custom/RTMP</button>
                 </div>
-
                 {config.streamType === 'twitch' ? (
-                  <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
-                    <div className="space-y-1">
-                      <label className="text-[9px] font-bold uppercase text-[var(--studio-text-muted)] ml-1">Channel Name</label>
-                      <input type="text" placeholder="Twitch User" className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs text-[var(--studio-text)] outline-none focus:border-[var(--accent)]" value={config.channelName} onChange={e => setConfig({...config, channelName: e.target.value})} />
-                    </div>
-                  </div>
+                  <input type="text" placeholder="Twitch User" className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs text-[var(--studio-text)] outline-none focus:border-[var(--accent)]" value={config.channelName} onChange={e => setConfig({...config, channelName: e.target.value})} />
                 ) : (
-                  <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
-                    <div className="space-y-1">
-                      <label className="text-[9px] font-bold uppercase text-[var(--studio-text-muted)] ml-1">Ingest URL (WHIP Bridge)</label>
-                      <input type="text" placeholder="https://ingest.provider.com/..." className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs text-[var(--studio-text)] outline-none focus:border-[var(--accent)]" value={config.customEndpoint} onChange={e => setConfig({...config, customEndpoint: e.target.value})} />
-                      <p className="text-[8px] text-[var(--studio-text-muted)] mt-1 ml-1 leading-tight">Requires a WHIP-to-RTMP bridge (e.g. Dolby.io, Cloudflare, SRS)</p>
-                    </div>
-                  </div>
+                  <input type="text" placeholder="https://ingest.provider.com/..." className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs text-[var(--studio-text)] outline-none focus:border-[var(--accent)]" value={config.customEndpoint} onChange={e => setConfig({...config, customEndpoint: e.target.value})} />
                 )}
-                
-                <div className="space-y-1">
-                  <label className="text-[9px] font-bold uppercase text-[var(--studio-text-muted)] ml-1">Stream Key</label>
-                  <input type="password" placeholder="live_..." className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs font-mono text-[var(--studio-text)] outline-none focus:border-[var(--accent)]" value={config.streamKey} onChange={e => setConfig({...config, streamKey: e.target.value})} />
-                </div>
+                <input type="password" placeholder="live_..." className="w-full bg-black/20 border border-[var(--studio-border)] rounded-lg px-3 py-2 text-xs font-mono text-[var(--studio-text)] outline-none focus:border-[var(--accent)]" value={config.streamKey} onChange={e => setConfig({...config, streamKey: e.target.value})} />
               </div>
             )}
           </section>
@@ -443,20 +427,14 @@ const App: React.FC = () => {
             {!isSettingsMinimized && (
               <div className="mt-4 space-y-4">
                 <div className="p-3 bg-black/20 rounded-xl border border-[var(--studio-border)] space-y-3">
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-bold uppercase text-[var(--studio-text-muted)]">Output Resolution</label>
-                    <select className="w-full bg-black/40 border border-[var(--studio-border)] rounded-lg px-2 py-1.5 text-[10px] text-[var(--studio-text)] outline-none" value={config.resolution} onChange={e => setConfig({...config, resolution: e.target.value})}>
-                      <option value="1920x1080">1080p</option>
-                      <option value="1280x720">720p</option>
-                    </select>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-bold uppercase text-[var(--studio-text-muted)]">Target Framerate</label>
-                    <select className="w-full bg-black/40 border border-[var(--studio-border)] rounded-lg px-2 py-1.5 text-[10px] text-[var(--studio-text)] outline-none" value={config.fps} onChange={e => setConfig({...config, fps: parseInt(e.target.value)})}>
-                      <option value="30">30 FPS</option>
-                      <option value="60">60 FPS</option>
-                    </select>
-                  </div>
+                  <select className="w-full bg-black/40 border border-[var(--studio-border)] rounded-lg px-2 py-1.5 text-[10px] text-[var(--studio-text)]" value={config.resolution} onChange={e => setConfig({...config, resolution: e.target.value})}>
+                    <option value="1920x1080">1080p Full HD</option>
+                    <option value="1280x720">720p HD</option>
+                  </select>
+                  <select className="w-full bg-black/40 border border-[var(--studio-border)] rounded-lg px-2 py-1.5 text-[10px] text-[var(--studio-text)]" value={config.fps} onChange={e => setConfig({...config, fps: parseInt(e.target.value)})}>
+                    <option value="30">30 FPS</option>
+                    <option value="60">60 FPS</option>
+                  </select>
                 </div>
               </div>
             )}
